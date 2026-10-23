@@ -25,6 +25,7 @@ factory-coverage = "factory.coverage:main"
 factory-datamodel = "factory.datamodel:main"
 factory-verify = "factory.verify:main"
 factory-promote = "factory.promote:main"
+factory-learning = "factory.learning:main"
 
 [tool.setuptools.packages.find]
 include = ["factory*"]

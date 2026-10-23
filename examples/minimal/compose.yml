@@ -1,0 +1,4 @@
+services:
+  test:
+    image: python:3.12-slim
+    command: ["python", "-c", "assert 2 + 2 == 4; print('factory smoke passed')"]

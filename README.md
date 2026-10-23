@@ -90,7 +90,11 @@ an explicit `FACTORY_HOST_CONFIG` file; see [deployment guidance](docs/deploymen
 Compose validation rejects privileged containers, dangerous mounts, external
 resources, host ports, and other unsafe declarations. Each file is checked before
 merging, so overrides cannot conceal unsafe input. Security-sensitive paths must
-not contain unresolved interpolation.
+not contain unresolved interpolation. Bind sources under a home directory are
+rejected in absolute form; a repository-relative source is allowed inside the
+subject repository even when that checkout lives under `/Users` or `/home`, but
+never for credential or metadata subtrees and never when traversal or a symlink
+leaves the repository.
 
 Coverage runs repository tests **on the host before Compose**. Those tests and
 build inputs must be trusted. Agent instructions are not an OS security boundary.

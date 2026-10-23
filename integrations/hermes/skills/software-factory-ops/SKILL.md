@@ -9,6 +9,14 @@ metadata:
 
 # Software Factory Ops
 
+## Standalone installation
+
+The direct commands in this section are instructions for a standalone
+installation of the public engine. Where an operator provides a private launcher
+(for example a `factory` command or a deployment-specific wrapper), that
+launcher's guidance supersedes them; follow it and do not substitute these
+commands.
+
 From the factory checkout, use `uv run --locked factory-run --help`. An
 installation managed without uv can use `python -m factory.runner --help`
 from its factory environment. Supply the task ID, subject repository, Compose files,

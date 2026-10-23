@@ -243,9 +243,42 @@ SENSITIVE_HOST_ROOTS = (
     "/dev",
 )
 
+# Repo-relative subtrees that carry credentials, VCS metadata, or registry
+# tokens. A repository checked out under a home root may mount its own
+# ordinary files, but never these subtrees.
+SENSITIVE_REPO_SUBPATHS = (
+    ".git",
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".docker",
+    ".kube",
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    ".env",
+    "secrets",
+)
+
 # The repo containing this policy module; relative bind-mount sources are
 # resolved against it.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _check_sensitive_repo_subpath(
+    resolved: Path, root: Path, source: str, where: str
+) -> None:
+    """Reject repo-contained paths that hold credentials or VCS metadata."""
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:  # pragma: no cover - callers prove containment first
+        return
+    for part in relative.parts:
+        if part.lower() in SENSITIVE_REPO_SUBPATHS:
+            raise PolicyViolation(
+                f"{where}mounting sensitive repository path '{source}' "
+                f"(resolves to '{resolved}') is forbidden"
+            )
 
 
 def check_bind_source(
@@ -254,10 +287,18 @@ def check_bind_source(
     """Gate a single bind-mount source string.
 
     Bare names (no path separators) are compose-internal named volumes and
-    pass. Absolute sources are checked against the sensitive host roots
-    (both raw and resolved, so symlink indirection is caught). Relative
-    sources are additionally resolved against the repo root with
-    Path.resolve() (catching symlink escapes) and must stay inside it.
+    pass.
+
+    Absolute sources must not point at sensitive host roots (/etc, /var,
+    /Users, /home, ...), checked both raw and resolved so symlink indirection
+    is caught.
+
+    Relative sources are resolved against the repo root. They must stay inside
+    that repo root (catching traversal and symlink escapes) and must not touch
+    a credential or VCS subpath of the repo. A repository may legitimately be
+    checked out under /Users or /home, so containment in the repo -- not the
+    host root prefix -- decides whether a relative source is allowed; the
+    absolute form of the same path is still rejected.
     """
     where = f"service '{name}': " if name else ""
     # Named volume: bare identifier, no separators at all.
@@ -265,14 +306,22 @@ def check_bind_source(
         return
     root = Path(repo_root or _REPO_ROOT).resolve()
     src_path = Path(source).expanduser()
-    is_relative = not src_path.is_absolute()
-    if is_relative:
-        src_path = root / src_path
-    resolved = src_path.resolve()
 
-    # Sensitive roots first, checked against BOTH the raw path and the
-    # resolved one (on macOS /etc is a symlink into /private/etc, so
-    # resolution can move a path between roots).
+    if not src_path.is_absolute():
+        resolved = (root / src_path).resolve()
+        if resolved != root and not resolved.is_relative_to(root):
+            raise PolicyViolation(
+                f"{where}bind-mount source '{source}' resolves to "
+                f"'{resolved}', outside the repo root '{root}' -- relative "
+                f"escapes are forbidden"
+            )
+        _check_sensitive_repo_subpath(resolved, root, source, where)
+        return
+
+    resolved = src_path.resolve()
+    # Sensitive roots are checked against BOTH the raw path and the resolved
+    # one (on macOS /etc is a symlink into /private/etc, so resolution can
+    # move a path between roots).
     candidates = {src_path, resolved}
     for candidate in candidates:
         for sensitive in SENSITIVE_HOST_ROOTS:
@@ -283,13 +332,6 @@ def check_bind_source(
                     f"(resolves to '{resolved}') is forbidden "
                     f"(under '{sensitive}')"
                 )
-
-    if is_relative and resolved != root and not resolved.is_relative_to(root):
-        raise PolicyViolation(
-            f"{where}bind-mount source '{source}' resolves to "
-            f"'{resolved}', outside the repo root '{root}' -- relative "
-            f"escapes are forbidden"
-        )
 
 
 def _check_repo_path(
@@ -537,6 +579,31 @@ def assert_safe_compose_file(
                 )
 
 
+# Compose global flags a caller may never re-supply: the project name and the
+# compose file set are policy-controlled. Both the spaced, ``=``, and compact
+# (``-pNAME`` / ``-fFILE``) spellings are rejected.
+BANNED_COMPOSE_GLOBAL_FLAGS = (
+    "-p",
+    "--project-name",
+    "--project-directory",
+    "-f",
+    "--file",
+)
+
+
+def _forbidden_global_flag(token: str) -> str | None:
+    """Return the banned global flag a token supplies, if any."""
+    name = token.partition("=")[0]
+    if name in BANNED_COMPOSE_GLOBAL_FLAGS:
+        return name
+    # Short options accept a compact value (``-pNAME``, ``-fFILE``); long
+    # options are already covered by the exact match above.
+    if token.startswith("-") and not token.startswith("--") and len(token) > 2:
+        if token[1] in ("p", "f"):
+            return token[:2]
+    return None
+
+
 def run_compose(
     project_name: str,
     compose_files: list[str],
@@ -554,13 +621,12 @@ def run_compose(
     # Reject caller-supplied global Compose flags: project name and file set
     # are the factory's own enforced inputs, so letting args re-specify them
     # would let a caller bypass the policy checks above.
-    banned_flags = ("-p", "--project-name", "--project-directory", "-f", "--file")
     for arg in args:
         token = str(arg)
-        name = token.partition("=")[0]
-        if name in banned_flags:
+        flag = _forbidden_global_flag(token)
+        if flag:
             raise PolicyViolation(
-                f"caller-supplied global Compose flag '{name}' is forbidden in "
+                f"caller-supplied global Compose flag '{flag}' is forbidden in "
                 f"args (project name and compose files are policy-controlled); "
                 f"got {token!r}"
             )
@@ -643,6 +709,36 @@ FACTORY_RESERVED_HOST_PORTS = {
 }
 
 
+def _parse_port_allowlist(value: str) -> list[int]:
+    """Parse an explicit comma-separated host-port allowlist.
+
+    Raises PolicyViolation for empty, non-numeric, signed, decimal, or
+    out-of-range entries so a malformed request fails before any host probe.
+    """
+    tokens = str(value).split(",")
+    if any(not token.strip() for token in tokens):
+        raise PolicyViolation(
+            "port allowlist must be comma-separated integers in 1..65535; "
+            f"got {value!r}"
+        )
+    ports: list[int] = []
+    for token in tokens:
+        text = token.strip()
+        # isdigit() rejects the signs, decimals, and words int() would not.
+        if not text.isdigit():
+            raise PolicyViolation(
+                "port allowlist must be comma-separated integers in 1..65535; "
+                f"got {value!r}"
+            )
+        port = int(text)
+        if not 1 <= port <= 65535:
+            raise PolicyViolation(
+                f"port allowlist entry {port} is outside the valid range 1..65535"
+            )
+        ports.append(port)
+    return ports
+
+
 def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
     """
     Allocate `n` free host TCP ports for a factory test that genuinely
@@ -657,10 +753,17 @@ def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
       else              -- treated as an ALLOWLIST of specific ports to
                            check (each must be currently free); returns only
                            the ones that are free.
+
+    Request and operator-configuration validation happen BEFORE any host or
+    Docker inspection, so a bad allowlist or invalid FACTORY_HOST_CONFIG fails
+    closed without probing the host.
     """
     if avoid != "CONFLICT":
-        allowlist = [int(p) for p in str(avoid).split(",") if p.strip()]
-        used = get_host_ports_in_use() | reserved_host_ports()
+        allowlist = _parse_port_allowlist(avoid)
+        # reserved_host_ports() validates FACTORY_HOST_CONFIG, so it must run
+        # before the live Docker scan below.
+        reserved = reserved_host_ports()
+        used = get_host_ports_in_use() | reserved
         free = [p for p in allowlist if p not in used]
         if len(free) != len(allowlist):
             taken = [p for p in allowlist if p not in free]

@@ -132,12 +132,17 @@ def test_environment_without_site_packages_reports_unavailable(tmp_path, monkeyp
 
 
 def test_missing_pip_audit_binary_reports_unavailable(tmp_path, monkeypatch):
-    # No FACTORY_PIP_AUDIT, and pip-audit not on PATH / not in Hermes venv.
+    # No FACTORY_PIP_AUDIT, nothing in the engine interpreter environment,
+    # nothing on an isolated PATH, and no historical Hermes venv.
     venv = _tmp_venv(tmp_path)
     repo = _repo_with(tmp_path, {})
     monkeypatch.delenv("FACTORY_PIP_AUDIT", raising=False)
-    monkeypatch.setattr(audit.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(audit.Path, "home", lambda: tmp_path / "no-such-home")
+    empty = tmp_path / "isolated"
+    empty.mkdir()
+    monkeypatch.setattr(audit.sys, "executable", str(empty / "bin" / "python"))
+    monkeypatch.setattr(audit.sysconfig, "get_path", lambda _name: str(empty / "bin"))
+    monkeypatch.setenv("PATH", str(empty))
+    monkeypatch.setenv("HOME", str(empty / "home"))
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
     assert r.status == "unavailable"
     assert "not found" in r.detail

@@ -38,6 +38,11 @@ Every non-factory container change still fails postflight, even if not explicitl
 listed. Explicitly protected names also take precedence over the factory prefix.
 Keep the operator configuration stable for the duration of a job.
 
+A subject repository checked out under the operator's home directory is supported:
+its Compose files may bind their own relative paths. Absolute paths under `/Users`
+or `/home`, credential and metadata subtrees, and any source that resolution moves
+outside the repository remain rejected.
+
 Configure artifact storage through `--artifacts-root` and select an existing Docker
 endpoint through the launcher's environment. Do not change global Docker context
 or restart services during deployment. Subject repositories keep their own Python

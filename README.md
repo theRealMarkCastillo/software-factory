@@ -77,6 +77,7 @@ skills are installed separately from this checkout.
 | `factory.coverage` | Coverage of added Python lines, including dirty worktrees | No |
 | `factory.datamodel` | Data-model declarations and referenced test checks | No |
 | `factory.evidence` | Evidence manifest creation and acceptance checks | No |
+| `factory.verify` | Read-only verification of evidence against a candidate/base revision | No |
 | Curated skills | Intake, dispatch, worker behavior, QC | Hermes integration |
 | Board and profiles | Scheduling, worker permissions, lifecycle transitions | Hermes installation |
 
@@ -113,9 +114,17 @@ diagnostic artifacts, but cannot certify an assembled acceptance pass. Abrupt
 process termination can prevent cleanup; postflight comparison is detection, not
 rollback or proof that nothing happened during execution.
 
+Acceptance evidence is schema-versioned and bound to a clean source revision, an
+immutable diff base and the engine build that produced it. `factory-verify`
+re-checks a directory against an explicit candidate and base offline and
+read-only, and exits `0` only when it can certify. See
+[evidence-gate documentation](docs/evidence-gate.md) and its stated limits: the
+digest is integrity, not same-UID attestation.
+
 ## Documentation
 
 - [Standalone quickstart](docs/quickstart.md)
+- [Evidence gate: producer and verifier](docs/evidence-gate.md)
 - [Hermes setup and workflow](docs/hermes.md)
 - [Architecture and supported boundaries](docs/architecture.md)
 - [Skill inventory and provenance](docs/skill-inventory.md)

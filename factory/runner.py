@@ -40,8 +40,11 @@ from factory.audit import run_dependency_audit
 from factory.coverage import _diff_added_lines, run_coverage_gate
 from factory.datamodel import DATA_MODEL_FILENAME, run_data_model_gate
 from factory.evidence import (
-    EvidenceError,
-    assert_assembled_evidence,
+    MODES,
+    REQUIRED_ARTIFACTS,
+    capture_source,
+    check_evidence,
+    resolve_base_info,
     write_evidence_manifest,
 )
 from factory.policy import (
@@ -68,6 +71,7 @@ class RunResult:
     collateral_damage: bool = False
     gates: dict = field(default_factory=dict)
     gates_run: bool = True
+    mode: str = "acceptance"
     log: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -83,6 +87,7 @@ class RunResult:
             "collateral_damage": self.collateral_damage,
             "gates": self.gates,
             "gates_run": self.gates_run,
+            "mode": self.mode,
             "log": self.log,
         }
 
@@ -110,8 +115,13 @@ def _diff_has_added_python(repo: Path, base: str) -> bool:
     return any(added.values())
 
 
-def _run_preflight_gates(repo: Path, result: RunResult) -> bool:
+def _run_preflight_gates(repo: Path, result: RunResult, base_info: dict) -> bool:
     """Run the audit/coverage/datamodel gates and record their results.
+
+    ``base_info`` is the immutable diff base captured BEFORE any gate ran
+    (``{"ref", "kind", "sha"}``); coverage measures against that SHA and records
+    it, so the gate's measurement is bound to the same base a later promotion
+    must advance from.
 
     Returns True when all gates pass. Never raises: a gate that throws is
     itself a fail-closed condition. Called BEFORE anything touches Docker.
@@ -120,6 +130,16 @@ def _run_preflight_gates(repo: Path, result: RunResult) -> bool:
     evidence manifest happens in ``run_factory_card``). Failure is per-gate:
     a failing gate stops the pipeline at its own stage and Docker never runs.
     """
+    base_ref = base_info.get("ref") or "main"
+    base_sha = base_info.get("sha") or ""
+    base_kind = base_info.get("kind") or "unresolved"
+    coverage_base = {
+        "base": base_ref,
+        "base_sha": base_sha,
+        "base_kind": base_kind,
+    }
+    diff_base = base_sha or base_ref
+
     # 1. Dependency audit gate. venv_path points at what ACTUALLY runs when a
     #    repo-local .venv exists; a confirmed vulnerability fails closed.
     venv_path = str(repo / ".venv") if (repo / ".venv").is_dir() else ""
@@ -149,16 +169,18 @@ def _run_preflight_gates(repo: Path, result: RunResult) -> bool:
 
     # 2. Coverage delta gate. Skipped entirely (a log line, not a pass) when
     #    the diff vs base adds no python lines -- nothing new to measure.
-    base = "main"
-    if _diff_has_added_python(repo, base):
+    if _diff_has_added_python(repo, diff_base):
         try:
-            cov = run_coverage_gate(str(repo), base=base, require_fresh=True)
-            result.gates["coverage"] = _gate_dict(cov)
+            cov = run_coverage_gate(str(repo), base=diff_base, require_fresh=True)
+            cov = _gate_dict(cov)
+            cov.update(coverage_base)
+            result.gates["coverage"] = cov
         except Exception as exc:  # noqa: BLE001 - gate crash is fail-closed evidence
             result.gates["coverage"] = {
                 "status": "error",
                 "passed": False,
                 "detail": f"{type(exc).__name__}: {exc}",
+                **coverage_base,
             }
         if not result.gates["coverage"].get("passed", False):
             result.stage = "coverage_gate"
@@ -168,8 +190,14 @@ def _run_preflight_gates(repo: Path, result: RunResult) -> bool:
             )
             return False
     else:
-        result.gates["coverage"] = {"status": "skipped", "reason": "no_added_python"}
-        result.log.append(f"coverage gate skipped: no added python lines vs {base!r}")
+        result.gates["coverage"] = {
+            "status": "skipped",
+            "reason": "no_added_python",
+            **coverage_base,
+        }
+        result.log.append(
+            f"coverage gate skipped: no added python lines vs {base_ref!r}"
+        )
 
     # 3. Data-model gate: run only when a data-model.yml is present.
     if (repo / DATA_MODEL_FILENAME).is_file():
@@ -282,13 +310,16 @@ def run_factory_card(
     env_example: str = ".env.example",
     fixture_paths: list[str] | None = None,
     run_gates: bool = True,
+    mode: str | None = None,
+    base_ref: str = "main",
 ) -> RunResult:
     """
     Full sanctioned lifecycle for a factory Compose job:
       1. Statically validate the compose config (policy.assert_safe_compose_file)
-      1b. Run the pre-Docker gates (audit / coverage / data-model) and fail
-          closed at the first failing gate -- Docker never builds on top of a
-          gate that did not pass. Gate results are recorded on the RunResult
+      1b. Capture the source revision and the immutable diff-base SHA, run the
+          pre-Docker gates (audit / coverage / data-model) against that base and
+          fail closed at the first failing gate -- Docker never builds on top of
+          a gate that did not pass. Gate results are recorded on the RunResult
           and folded into the evidence manifest.
       2. Snapshot all host containers (preflight)
       3. Generate a unique factory-* project name
@@ -298,16 +329,34 @@ def run_factory_card(
       7. Snapshot all host containers again (postflight) and classify changes
       8. A known protected-project change is a safety incident with a durable
          marker; unknown-host churn is still a failed collateral warning.
-      9. Write and then enforce the evidence manifest: a green run whose
-         manifest cannot pass assert_assembled_evidence is itself a failure.
+      9. Capture the end-of-run source snapshot, write a schema-v2 evidence
+         manifest (source start/end, base SHA, engine fingerprint, teardown,
+         safety, hashed logs, checksum sidecar) and enforce it with the shared
+         schema-v2 checker: a green run whose evidence cannot be certified is
+         itself a failure.
+
+    ``mode`` selects acceptance (default when gates run) or diagnostic (the
+    default when gates are disabled). Diagnostic evidence is recorded honestly
+    and can never certify. An explicit ``mode="acceptance"`` together with
+    ``run_gates=False`` is refused before any gate or Docker work: the
+    contradiction must not be recordable.
 
     Intentional breaking-behavior change : the pre-Docker gates
     run by DEFAULT (``run_gates=True``). Previously the runner never
     invoked the gates at all, so a green result carried no audit/coverage/data-
     model guarantee. To opt out, pass ``run_gates=False`` (or ``--no-gates`` on
     the CLI); a disabled-gate run is visibly second-class and records
-    ``gates_run: false`` in its result and evidence manifest.
+    ``gates_run: false`` / ``mode: "diagnostic"``.
     """
+    if mode is not None and mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}: {mode!r}")
+    if mode == "acceptance" and not run_gates:
+        raise ValueError(
+            "explicit acceptance mode requires gates; --no-gates can only "
+            "produce diagnostic evidence"
+        )
+    resolved_mode = mode or ("acceptance" if run_gates else "diagnostic")
+
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
         raise PolicyViolation(f"repo path does not exist: {repo}")
@@ -315,7 +364,7 @@ def run_factory_card(
     # touching Docker. This closes the repo_root=/etc reachability path.
     assert_safe_repo_root(repo)
 
-    result = RunResult(card_id=card_id, project_name="")
+    result = RunResult(card_id=card_id, project_name="", mode=resolved_mode)
     start = time.time()
 
     # 1. Static validation before anything touches Docker.
@@ -334,14 +383,29 @@ def run_factory_card(
     project_name = new_factory_project(card_id)
     result.project_name = project_name
 
-    # 1b. Pre-Docker gates: fail closed BEFORE anything is built or run.
+    # 1b. Capture the source and the immutable diff base BEFORE any gate runs,
+    #     then run the gates against that captured base. Resolving the base only
+    #     afterwards could not bind what was actually measured.
+    source_start = capture_source(repo)
+    base_info = resolve_base_info(repo, base_ref)
+
+    # Pre-Docker gates: fail closed BEFORE anything is built or run.
     result.gates_run = run_gates
     if not run_gates:
+        result.gates["audit"] = {"status": "disabled", "reason": "gates_disabled"}
+        result.gates["datamodel"] = {"status": "disabled", "reason": "gates_disabled"}
+        result.gates["coverage"] = {
+            "status": "disabled",
+            "reason": "gates_disabled",
+            "base": base_info["ref"],
+            "base_sha": base_info["sha"],
+            "base_kind": base_info["kind"],
+        }
         result.log.append(
             "GATES SKIPPED (--no-gates): this run is second-class evidence "
             "and cannot certify an assembled-system claim on its own"
         )
-    elif not _run_preflight_gates(repo, result):
+    elif not _run_preflight_gates(repo, result, base_info):
         result.duration_s = time.time() - start
         return result
 
@@ -354,6 +418,13 @@ def run_factory_card(
     # 2. Preflight snapshot of protected projects.
     result.stage = "preflight_snapshot"
     before = ProtectedProjectSnapshot.capture()
+    # Teardown is recorded in the evidence manifest: an attempted-but-failed
+    # teardown can never certify, so the outcome must survive this function.
+    teardown_state = {
+        "attempted": False,
+        "ok": False,
+        "detail": "teardown never ran",
+    }
 
     try:
         # 3/4. Build and run, treating the test service's exit code as authoritative.
@@ -412,18 +483,27 @@ def run_factory_card(
         # field must keep telling QC where the run actually died.
         if not result.stage.startswith(("SAFETY_INCIDENT", "COLLATERAL_WARNING")):
             result.stage = "tearing_down"
+        teardown_state["attempted"] = True
         try:
             teardown_proc = teardown(project_name, abs_compose_files)
             if teardown_proc.returncode != 0:
                 warning = f"teardown failed with exit code {teardown_proc.returncode}"
+                teardown_state.update(
+                    ok=False, detail=f"teardown exited {teardown_proc.returncode}"
+                )
                 result.log.append(warning)
                 result.error = result.error or warning
                 result.passed = False
+            else:
+                teardown_state.update(ok=True, detail="")
         except Exception as teardown_exc:  # noqa: BLE001 - teardown failure is reportable
             # Teardown failure is itself a reportable event, but we still
             # proceed to the postflight safety check -- that check is more
             # important than a clean stage transition.
             warning = f"teardown warning: {teardown_exc}"
+            teardown_state.update(
+                ok=False, detail=f"{type(teardown_exc).__name__}: {teardown_exc}"
+            )
             result.log.append(warning)
             result.error = result.error or warning
             result.passed = False
@@ -472,6 +552,15 @@ def run_factory_card(
 
     result.stage = "complete" if result.passed else "complete_with_errors"
     result.duration_s = time.time() - start
+    # End-of-run source snapshot: proves the source did not move while the
+    # gates measured it and Compose ran it. A change cannot certify.
+    source_end = capture_source(repo)
+    safety = {
+        "postflight": "clean",
+        "protected_changes": list(protected_changes),
+        "unexpected_changes": list(unexpected_changes),
+        "collateral_damage": bool(result.collateral_damage),
+    }
     resolved_env_file = str(
         _resolve_input_path(repo, env_file, "env file", required=False)
     )
@@ -499,10 +588,21 @@ def run_factory_card(
             coverage=result.gates.get("coverage"),
             datamodel=result.gates.get("datamodel"),
             gates_run=result.gates_run,
+            mode=resolved_mode,
+            source_start=source_start,
+            source_end=source_end,
+            base=base_info,
+            runtime={"teardown": teardown_state, "safety": safety},
+            # A passing run must carry all three logs; a failed run records
+            # whichever logs exist so the failure stays diagnosable.
+            artifacts=list(REQUIRED_ARTIFACTS) if result.passed else None,
+            card_id=card_id,
+            project_name=project_name,
             execution={
                 "exit_code": result.exit_code,
                 "passed": result.passed,
                 "stage": result.stage,
+                "duration_s": round(result.duration_s, 2),
             },
         )
     except Exception as exc:  # noqa: BLE001 - evidence failures must fail the run
@@ -511,24 +611,29 @@ def run_factory_card(
         result.error = f"evidence generation failed: {exc}"
         result.log.append(result.error)
         return result
-    # Evidence enforcement: the written manifest must itself pass the
-    # assembled-evidence check. A manifest that cannot certify the claim it
-    # records fails the run -- even a green one. The manifest and logs remain
-    # in the artifacts dir for diagnosis.
+    # Evidence enforcement: the written manifest must itself pass the shared
+    # schema-v2 checker -- schema identity, acceptance mode, clean/unchanged
+    # source, complete execution, teardown, safety, gate policy, engine
+    # identity and hashed artifacts. A manifest that cannot certify the claim
+    # it records fails the run, even a green one. The legacy v1 reader is NOT
+    # used here; it exists only for older artifacts and readers.
     manifest = json.loads(manifest_path.read_text())
     # Failed runs retain diagnostic evidence and their original failure;
     # only a candidate acceptance pass needs certification here.
     if not result.passed:
         return result
     try:
-        assert_assembled_evidence(manifest)
-    except EvidenceError as exc:
+        check = check_evidence(manifest, artifacts_dir=artifacts_dir)
+        failure = "" if check.ok else f"{check.reason}: {check.detail}"
+    except Exception as exc:  # noqa: BLE001 - a crashing checker fails closed
+        failure = f"checker_error: {type(exc).__name__}: {exc}"
+    if failure:
         result.passed = False
-        result.error = f"evidence_enforcement: {exc}"
+        result.error = f"evidence_enforcement: {failure}"
         result.stage = "evidence_enforcement"
-        result.log.append(f"ASSEMBLED EVIDENCE REJECTED: {exc}")
+        result.log.append(f"ASSEMBLED EVIDENCE REJECTED: {failure}")
         (artifacts_dir / "EVIDENCE_REJECTED.txt").write_text(
-            f"assembled evidence rejected: {exc}\n"
+            f"evidence rejected: {failure}\n"
         )
     return result
 
@@ -657,7 +762,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip the pre-Docker gates (audit/coverage/datamodel). The run is "
         "marked second-class in its result and evidence manifest.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=["acceptance", "diagnostic"],
+        default=None,
+        help="Evidence mode. Default: acceptance when gates run, diagnostic "
+        "when --no-gates is given. Diagnostic evidence can never certify.",
+    )
     args = parser.parse_args(argv)
+
+    # A run without gates cannot be acceptance evidence. Refuse the
+    # contradiction as a usage error before any gate or Docker work.
+    if args.no_gates and args.mode == "acceptance":
+        print(
+            "factory-run: error: --no-gates cannot be combined with --mode "
+            "acceptance; a run without gates can only produce diagnostic evidence",
+            file=sys.stderr,
+        )
+        return 2
 
     result = run_factory_card(
         card_id=args.card,
@@ -670,6 +792,7 @@ def main(argv: list[str] | None = None) -> int:
         env_example=args.env_example,
         fixture_paths=args.fixture,
         run_gates=not args.no_gates,
+        mode=args.mode,
         artifacts_root=args.artifacts_root,
     )
     print(json.dumps(result.to_dict(), indent=2))

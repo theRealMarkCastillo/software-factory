@@ -41,13 +41,26 @@ flowchart LR
 Requires Python 3.11 or later and Git. Docker with Compose v2 is required only
 for Compose execution. Dependency auditing additionally needs pip-audit or npm.
 
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first.
+The checkout defaults to Python 3.12 through `.python-version`; `uv sync` creates
+`.venv` and installs the versions recorded in `uv.lock`, including development
+and audit tools. No environment activation is needed.
+
 ```sh
 git clone https://github.com/theRealMarkCastillo/software-factory.git
 cd software-factory
+uv sync --locked
+uv run --locked python -m pytest -q
+uv run --locked factory-run --help
+```
+
+Standard pip installation is also supported. It resolves dependency ranges from
+`pyproject.toml` rather than using `uv.lock`:
+
+```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -e '.[dev,audit]'
 .venv/bin/python -m pytest -q
-.venv/bin/python -m factory.runner --help
 ```
 
 The default suite skips two explicitly marked live-host checks. See the

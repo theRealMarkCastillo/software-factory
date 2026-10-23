@@ -32,7 +32,7 @@ def test_main_clean_repo_outputs_json_and_exits_zero(tmp_path, monkeypatch, caps
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "pip").write_text("x")  # existence marker
-    (venv / "lib").mkdir(parents=True)
+    (venv / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
     audit_binary = tmp_path / "pip-audit"
     audit_binary.write_text("fixture binary; subprocess is mocked")
 
@@ -68,7 +68,7 @@ def test_main_vulnerable_repo_exits_nonzero(tmp_path, monkeypatch, capsys):
     venv = tmp_path / "venv"
     (venv / "bin").mkdir(parents=True)
     (venv / "bin" / "pip").write_text("x")  # existence marker
-    (venv / "lib").mkdir(parents=True)
+    (venv / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
     audit_binary = tmp_path / "pip-audit"
     audit_binary.write_text("fixture binary; subprocess is mocked")
 

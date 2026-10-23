@@ -5,16 +5,16 @@ Hermes. Use your own orchestrator identity. No personal profile configuration is
 
 ## Install the curated skill bundle
 
-Install the factory Python environment first. From the checkout:
+Run `uv sync --locked` to install the factory Python environment first. From the checkout:
 
 ```sh
-python3 scripts/install_hermes_skills.py --destination ~/.hermes/skills
+uv run --locked python scripts/install_hermes_skills.py --destination ~/.hermes/skills
 ```
 
 This prints a dry-run plan. To copy the eight curated skills:
 
 ```sh
-python3 scripts/install_hermes_skills.py --destination ~/.hermes/skills --apply
+uv run --locked python scripts/install_hermes_skills.py --destination ~/.hermes/skills --apply
 ```
 
 The installer refuses to overwrite existing skill directories. Compare existing
@@ -30,7 +30,7 @@ board and worker profiles. Suggested roles are `factory-runner` for implementati
 These names do not create profiles or grant permissions automatically.
 
 Give workers dedicated workspaces and minimal tool access. Configure the factory
-Python interpreter and artifact directory explicitly. Verify your Hermes version
+Python interpreter (`/path/to/software-factory/.venv/bin/python`) and artifact directory explicitly. Verify your Hermes version
 supports the desired Kanban dispatcher and lifecycle operations; this repo does
 not install a dispatcher or promise compatibility with private Hermes extensions.
 

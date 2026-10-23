@@ -117,9 +117,13 @@ rollback or proof that nothing happened during execution.
 Acceptance evidence is schema-versioned and bound to a clean source revision, an
 immutable diff base and the engine build that produced it. `factory-verify`
 re-checks a directory against an explicit candidate and base offline and
-read-only, and exits `0` only when it can certify. See
-[evidence-gate documentation](docs/evidence-gate.md) and its stated limits: the
-digest is integrity, not same-UID attestation.
+read-only, and exits `0` only when it can certify. `factory-promote` is the only
+sanctioned way to move a local branch: it verifies in-process, refuses a dirty
+worktree, a target checked out anywhere, a moved base or a non-fast-forward
+candidate, and advances exactly one ref with a compare-and-swap. It never
+pushes, tags or deploys. See the [evidence-gate documentation](docs/evidence-gate.md)
+and its stated limits: the digest is integrity, not same-UID attestation, and
+raw Git outside the command is not intercepted.
 
 ## Documentation
 

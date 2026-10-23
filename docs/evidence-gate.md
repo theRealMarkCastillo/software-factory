@@ -101,6 +101,64 @@ source binding, teardown, safety, engine identity, or artifact hashes. A legacy
 v1 manifest — including the pilot's — verifies as
 `legacy_schema_unsupported` and is left byte-identical.
 
+## Promoting a verified revision
+
+```sh
+factory-promote \
+  --repo <path>                    # worktree toplevel; must be clean
+  --artifacts-dir <dir>            # schema-v2 acceptance evidence
+  --candidate <40-hex sha>         # full candidate commit
+  --base <40-hex sha>              # full expected base commit
+  --target refs/heads/<name>       # existing branch ref, not checked out anywhere
+  [--dry-run] [--json]
+# equivalently: python -m factory.promote ...
+```
+
+Exit codes: `0` promoted (or dry-run ok), `1` rejected, `2` usage error.
+Promotion verifies in-process with `verify_evidence`; it never reads a receipt,
+so there is nothing to replay or forge. There are no `--force`, `--skip-gate`,
+`--allow-legacy`, `--push`, `--tag` or `--mode` flags.
+
+Preconditions, all checked before anything is written:
+
+- `--target` is a full `refs/heads/<name>` ref that passes
+  `git check-ref-format`, exists, and is not symbolic. Tags, `HEAD`, short names
+  and symref aliases are refused.
+- The target is not checked out in **any** worktree. Git's `update-ref` would
+  silently leave such a checkout's files stale, so this is refused even when
+  that worktree is clean; detach or remove it first. The promoting worktree must
+  be clean (untracked files included).
+- The target is exactly `--base` (`target_moved` otherwise), the candidate is a
+  commit, `base` is its ancestor, and the candidate is the tip of some branch.
+- Evidence certifies the exact candidate and base. Any verifier rejection stops
+  the command with `evidence_rejected:<reason>`.
+
+Only the named ref changes: one `update-ref --no-deref <ref> <candidate>
+<expected-old>` compare-and-swap, then a read-back that must return the
+candidate. No index, worktree, config, remote or tag is touched, and no
+push/receive/merge hook can run. `--dry-run` performs every precondition and
+the in-process verification, and skips only the ref update.
+
+Concurrency: a lock under the **common** Git dir (`factory-promote.lock`,
+`O_CREAT|O_EXCL`) admits one promotion at a time. An existing lock always fails
+closed with `lock_busy`; it is never stolen because it looks old, and only a
+lock this invocation created (matched by inode) is removed in `finally`.
+Occupancy, cleanliness, the target digest and the evidence are re-observed
+immediately before the CAS, so a change made after the first verification is
+caught.
+
+Repository hooks and fsmonitor are suppressed for every Git call with
+command-scoped options (`-c core.hooksPath=/dev/null -c core.fsmonitor=false
+--no-optional-locks`). A `reference-transaction` hook therefore cannot observe
+or veto a sanctioned promotion, and no persistent configuration is written.
+
+Residual limit (stated, not hidden): a same-UID actor can rewrite the artifacts
+directory between the final hash read and the ref update, and raw `git`
+(`update-ref`, `push`, `merge`, a hand-edited ref) run outside this command is
+not intercepted. The compare-and-swap makes a concurrent *ref* writer lose
+(`ref_update_failed`) rather than be overwritten; the artifact window is
+bounded, not closed.
+
 ## Trust boundary
 
 SHA256 detects corruption, truncation, and uncoordinated edits. It is not

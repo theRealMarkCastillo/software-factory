@@ -1283,3 +1283,52 @@ def test_runner_enforcement_requires_schema_v2_not_the_legacy_reader(
     assert result.passed is False
     assert result.stage == "evidence_enforcement"
     assert "legacy_schema_unsupported" in (result.error or "")
+
+
+def test_diff_base_is_captured_before_a_gate_can_move_the_source(tmp_path, monkeypatch):
+    """Correction 4: resolving the base at the end could not bind the measurement."""
+    repo = _git_repo(tmp_path)
+    head_before = _head(repo)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+    captured = {}
+
+    def capturing_writer(artifacts_dir, repo_path, **kwargs):
+        captured.update(kwargs)
+        return real_evidence_manifest(artifacts_dir, repo_path, **kwargs)
+
+    monkeypatch.setattr(runner, "write_evidence_manifest", capturing_writer)
+
+    def moving_audit(*args, **kwargs):
+        # A gate that advances HEAD must not move the recorded diff base.
+        (repo / "app.py").write_text("moved by gate\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=test",
+                "commit",
+                "-qm",
+                "gate moved head",
+            ],
+            cwd=repo,
+            check=True,
+        )
+        return {"status": "pass", "passed": True}
+
+    monkeypatch.setattr(runner, "run_dependency_audit", moving_audit)
+
+    result = runner.run_factory_card(
+        "card", str(repo), ["compose.yml"], artifacts_root=str(tmp_path / "artifacts")
+    )
+
+    assert captured["base"]["sha"] == head_before
+    assert captured["coverage"]["base_sha"] == head_before
+    assert captured["source_start"]["sha"] == head_before
+    assert captured["source_end"]["sha"] != head_before
+    assert result.passed is False
+    assert result.stage == "evidence_enforcement"
+    assert "source_changed_during_run" in (result.error or "")

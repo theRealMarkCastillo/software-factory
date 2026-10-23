@@ -1,6 +1,50 @@
 # Evidence gate design: bind run evidence to guarded source promotion
 
-Status: design for review (card `t_371b42bb`). No runtime code in this increment.
+Status: accepted for implementation by Arx with the binding corrections below.
+Design card `t_371b42bb`; this document alone is not runtime acceptance.
+
+## Operator review corrections (override conflicting details below)
+
+1. Never steal a promotion lock based on age. An existing lock fails closed;
+   manual recovery is outside this command. Release only the lock this invocation
+   actually acquired, in finally. No 120-second stale-lock deletion.
+2. Disable repository hooks for sanctioned Git operations with command-scoped
+   `-c core.hooksPath=/dev/null` (no persistent config change), and disable optional
+   fsmonitor execution/optional index refresh for read-only probes. The assertion
+   below that disabling hooks requires rewriting configuration is incorrect.
+   Test an installed sentinel reference-transaction hook is NOT executed. There
+   is no hook_vetoed success-path feature in this increment.
+3. Validate targets using git check-ref-format as well as the full refs/heads/
+   prefix; reject symbolic target refs explicitly (never update HEAD/tags or a
+   symref alias). Recheck worktree occupancy and cleanliness immediately before
+   CAS. A same-UID raw Git checkout racing that last check remains outside the
+   lock's guarantee and must be documented.
+4. Capture the coverage base SHA BEFORE gates, pass that immutable SHA to the
+   actual coverage calculation, and record it. Resolving main only at the end
+   cannot bind the measured diff. Recheck subject HEAD/status after execution.
+5. CLI --mode defaults to automatic resolution: absent mode plus --no-gates is
+   diagnostic; absent mode with gates is acceptance. An EXPLICIT acceptance mode
+   together with --no-gates fails before lifecycle. Diagnostic never certifies.
+6. Inspect schema before requiring the new sidecar so real legacy evidence
+   reports legacy_schema_unsupported rather than only digest_missing. Use strict
+   types (booleans are not integers), bounded JSON, unique artifact names and
+   required artifacts. Reject symlinks for manifest/sidecar/artifacts, traversal,
+   and malformed hashes. Git reads must not invoke external diff/textconv/hooks.
+7. An allowed inapplicable-gate reason is necessary but insufficient: verify its
+   applicability against candidate/base source (dependency manifests, added Python
+   lines, data-model declaration); unavailable/error/unsupported never certify.
+   All checks use code-owned policy, not provider fields claiming their own scope.
+8. Clean start/end snapshots do NOT prove no transient edit was reverted, nor bind
+   all ignored files, mutable images, dependencies or inherited environment. State
+   this limit plainly. Explicit declared fixtures are checked against Git; this
+   increment is not a complete hermetic-build or hostile-same-UID attestation.
+9. Promotion failure means no target/index/worktree/config change; the scoped
+   coordination lock is an intentional temporary side effect. Offline tests must
+   guard all subprocess entry points capable of Docker/network, including Popen
+   and finally paths, not just runner.run_compose.
+
+Implementation is staged as evidence producer/verifier first, then guarded
+promotion, then independent full QC; ops integration/deployment remain separate.
 Base: `3673987e9d4a31de93faed38cef717aa57fde040`, branch `feat/evidence-gate-20261023`.
 
 This design is grounded in the current engine (`factory/evidence.py`,

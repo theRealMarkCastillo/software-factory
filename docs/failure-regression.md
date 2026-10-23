@@ -86,9 +86,20 @@ a reviewer sets `supported` **with** a statement and in-range evidence refs.
 Records and proposals are created `O_CREAT|O_EXCL|O_NOFOLLOW` and never
 rewritten. Imports are serialized per fingerprint with a blocking `flock`; the
 lock is never stolen, timed out, or age-invalidated. Outcomes: new identity ->
-`imported`; identical content -> `duplicate` (exit 0, byte-identical store);
-different content without `corrects` -> `conflict` (exit 1, prior record and
-listing untouched); valid `corrects` -> append.
+`imported`; identical content -> `duplicate` (exit 0, no record or proposal is
+created or rewritten); different content without `corrects` -> `conflict`
+(exit 1, prior record and listing untouched); valid `corrects` -> append.
+
+A rejected import never writes, rewrites or removes a record or a proposal.
+One narrow exception to "nothing on disk changed": a rejection that happens
+after the per-fingerprint lock is taken (conflict, invalid correction, store
+tampering) may leave an empty `<store>/locks/<fingerprint-hex>.lock` file
+behind, because the lock directory and lock file are created before the record
+directory is touched. Rejections that fail during store admission (for
+example a symlinked, sensitive, overlapping or inaccessible store path) create
+nothing at all and return a structured `store_invalid`. Duplicate idempotence
+is unaffected: a repeated identical import still creates and rewrites no
+record or proposal.
 
 ## Proposal (`factory-proposal` v1) — not authorization
 

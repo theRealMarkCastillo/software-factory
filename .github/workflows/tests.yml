@@ -10,6 +10,12 @@ jobs:
         python: ['3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The historical replay test checks out the cited baseline commit
+          # (a07521c) and repair commit; a shallow checkout lacks those objects
+          # and the replay refuses with `unknown_revision`. Full history keeps
+          # the replay offline and skips/xfails unnecessary.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           version: '0.11.6'

@@ -48,6 +48,7 @@ from factory.policy import (
     PolicyViolation,
     ProtectedProjectSnapshot,
     assert_safe_compose_file,
+    assert_safe_repo_root,
     new_factory_project,
     run_compose,
     teardown,
@@ -310,6 +311,9 @@ def run_factory_card(
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
         raise PolicyViolation(f"repo path does not exist: {repo}")
+    # Reject a sensitive subject root before resolving any compose/env input or
+    # touching Docker. This closes the repo_root=/etc reachability path.
+    assert_safe_repo_root(repo)
 
     result = RunResult(card_id=card_id, project_name="")
     start = time.time()

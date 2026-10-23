@@ -23,15 +23,29 @@ Absolute bind sources may not point at sensitive host roots (`/etc`, `/var`,
 after symlink resolution. This includes the operator's own home directory, the
 Docker socket, and system paths.
 
-Relative sources are resolved against the subject repository. They are allowed
-inside that repository even when the checkout itself lives under `/Users` or
-`/home`, so a normal repository-local data or fixture mount keeps working. They
-are rejected when resolution leaves the repository (traversal or symlink escape)
-or when any path component is a credential or metadata subtree: `.git`, `.ssh`,
-`.aws`, `.gnupg`, `.docker`, `.kube`, `.netrc`, `.npmrc`, `.pypirc`, `.env`, or
-`secrets`. The absolute spelling of a repository path remains rejected; use the
-relative form. Named volumes skip the host-path check because Compose resolves
-them internally.
+Relative sources are resolved against the subject repository. The exception is
+narrow: the checkout must be nested below a user home directory
+(`/Users/<user>/...` or `/home/<user>/...`), so a normal repository-local data
+or fixture mount keeps working there. Every other location -- the host root,
+sensitive host roots, user and immediate home directories, and checkouts under
+system roots such as `/etc` or `/var` -- gets no relative-mount exception. The
+runner rejects such a `repo_path` before Compose validation.
+
+Within a home checkout, a relative source must exist and is rejected when it
+resolves to the repository root itself, leaves the repository (traversal or
+symlink escape), or names a credential or metadata subtree: `.git`,
+`.git-credentials`, `.gitconfig`, `.ssh`, `.aws`, `.gnupg`, `.docker`, `.kube`,
+`.netrc`, `.npmrc`, `.pypirc`, the `.env` family (matched by prefix, so
+`.env.local` and `.env.production` are included), or `secrets`. Mounted
+directory *contents* are inspected by path metadata without reading file
+contents: a nested credential/metadata name, a symlink that points at the
+repository root, outside the repository, or into a sensitive subtree, and an
+unreadable tree all fail closed. The absolute spelling of a repository path
+remains rejected; use the relative form. Named volumes skip the host-path check
+because Compose resolves them internally.
+
+Static validation runs before Docker and cannot prevent a malicious process
+from mutating the tree between validation and container start.
 
 Coverage compares the selected Git base with the actual working tree and includes
 untracked Python files. Audit availability and successful execution are separate

@@ -91,10 +91,16 @@ Compose validation rejects privileged containers, dangerous mounts, external
 resources, host ports, and other unsafe declarations. Each file is checked before
 merging, so overrides cannot conceal unsafe input. Security-sensitive paths must
 not contain unresolved interpolation. Bind sources under a home directory are
-rejected in absolute form; a repository-relative source is allowed inside the
-subject repository even when that checkout lives under `/Users` or `/home`, but
-never for credential or metadata subtrees and never when traversal or a symlink
-leaves the repository.
+rejected in absolute form. A repository-relative source is allowed only when the
+subject checkout is itself nested below a user home directory
+(`/Users/<user>/...` or `/home/<user>/...`) and the source is an existing
+ordinary subtree: it may not resolve to the repository root, name or contain a
+credential/metadata subtree (`.env*`, `.git`, `.ssh`, ...), or contain a symlink
+that points at the repository root, outside the repository, or into a sensitive
+subtree. Unreadable trees fail closed. The runner rejects a `repo_path` that is
+the host root, a sensitive host root, or a home directory before Compose
+validation. Static validation inspects path metadata only and cannot prevent a
+concurrent filesystem mutation between validation and container start.
 
 Coverage runs repository tests **on the host before Compose**. Those tests and
 build inputs must be trusted. Agent instructions are not an OS security boundary.

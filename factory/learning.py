@@ -981,6 +981,50 @@ def build_parser():
     proposer.add_argument(
         "--json", action="store_true", dest="as_json", help="machine-readable output"
     )
+
+    replayer = subparsers.add_parser(
+        "replay",
+        help="execute one approved, non-promotional baseline/candidate replay",
+        description=(
+            "Run one evaluator-owned pytest suite against an explicit baseline "
+            "and candidate commit. Non-promotional: the report is diagnostic "
+            "evidence only and factory-verify/factory-promote reject it."
+        ),
+    )
+    replayer.add_argument("--repo", required=True, help="local git work-tree root")
+    replayer.add_argument("--baseline", required=True, help="full 40-hex commit SHA")
+    replayer.add_argument("--candidate", required=True, help="full 40-hex commit SHA")
+    replayer.add_argument(
+        "--suite-dir", required=True, dest="suite_dir", help="evaluator suite directory"
+    )
+    replayer.add_argument(
+        "--suite-digest",
+        required=True,
+        dest="suite_digest",
+        help="external expected suite digest (sha256:<64 hex>)",
+    )
+    replayer.add_argument(
+        "--work-root",
+        required=True,
+        dest="work_root",
+        help="existing empty directory that receives the retained checkouts",
+    )
+    replayer.add_argument("--out", required=True, help="non-existent report directory")
+    replayer.add_argument(
+        "--approve-execution",
+        action="store_true",
+        dest="approve_execution",
+        help="explicit approval to execute the reviewed suite and both revisions",
+    )
+    replayer.add_argument(
+        "--timeout-s",
+        type=int,
+        dest="timeout_s",
+        help="per-side timeout in seconds (default from the suite, max 3600)",
+    )
+    replayer.add_argument(
+        "--json", action="store_true", dest="as_json", help="machine-readable output"
+    )
     return parser
 
 
@@ -1003,10 +1047,62 @@ def render_human(result: LearningResult) -> str:
     return f"factory-learning: REJECTED {result.reason}: {result.detail}"
 
 
+def render_replay_human(result) -> str:
+    """Human rendering: the verdict, both SHAs, the digest and node outcomes."""
+    lines = [
+        f"factory-learning replay: {result.verdict.upper()} ({result.reason})",
+    ]
+    if result.detail:
+        lines.append(f"  detail: {result.detail}")
+    report = result.report
+    if report:
+        lines.append(
+            f"  baseline {report['sources']['baseline']['requested_sha']} -> "
+            f"candidate {report['sources']['candidate']['requested_sha']}"
+        )
+        lines.append(
+            f"  suite {report['suite']['suite_id']} digest {report['suite']['digest']}"
+        )
+        for side in ("baseline", "candidate"):
+            node = (
+                report["sides"][side]
+                .get("nodes", {})
+                .get(report["expectations"]["target"]["nodeid"], {})
+            )
+            call = node.get("call") or {}
+            lines.append(
+                f"  {side}: target call={call.get('outcome')} "
+                f"exception={call.get('exception_type')}"
+            )
+        lines.append("  non-promotional: promotional=false acceptance_evidence=false")
+        lines.append(f"  report: {result.report_path}")
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
     args = build_parser().parse_args(argv)
+    if args.command == "replay":
+        from factory.replay import replay
+
+        result = replay(
+            repo=args.repo,
+            baseline=args.baseline,
+            candidate=args.candidate,
+            suite_dir=args.suite_dir,
+            suite_digest=args.suite_digest,
+            work_root=args.work_root,
+            out=args.out,
+            approve_execution=args.approve_execution,
+            timeout_s=args.timeout_s,
+        )
+        if args.as_json:
+            print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+        else:
+            print(render_replay_human(result))
+        return result.exit_code
+
     if args.command == "import":
         result = import_incident(
             args.record, evidence_root=args.evidence_root, store=args.store

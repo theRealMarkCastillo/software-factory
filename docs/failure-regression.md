@@ -1,9 +1,14 @@
-# Failure intake: provenance-checked incidents and inert proposals
+# Failure intake and diagnostic replay
 
-Status: Stage A implemented (`factory-learning import|propose`). Deterministic
-replay is Stage B and is **not** implemented here; this document covers intake
-only. Nothing in this stage runs a command, opens a socket, creates a task, or
-edits a skill, test, gate or policy.
+Status: Stage A (`factory-learning import|propose`) and Stage B
+(`factory-learning replay`) implemented. A proposal remains pending review and
+grants nothing. A replay report is **diagnostic, non-promotional** evidence: it
+is not acceptance evidence, it is never a certificate, and `factory-verify` /
+`factory-promote` reject it.
+
+Replay is *historical reproduction* of one observable with an evaluator-owned
+suite. It is not original TDD provenance, not a statement about root cause, and
+not evidence of model quality, speed or cost improvement.
 
 Design: [failure-regression-design.md](failure-regression-design.md). Base
 revision: `4c7b695` (branch `feat/failure-regression-20261023`).
@@ -13,14 +18,24 @@ revision: `4c7b695` (branch `feat/failure-regression-20261023`).
 ```
 factory-learning import --record R.json --evidence-root DIR --store STORE [--json]
 factory-learning propose --store STORE [--fingerprint FP | --content-id CID] [--json]
+factory-learning replay --repo P --baseline SHA --candidate SHA \
+    --suite-dir D --suite-digest sha256:... --work-root R --out O \
+    --approve-execution [--timeout-s N] [--json]
 ```
 
-Exit codes: `0` imported/duplicate/proposed, `1` rejected or conflict, `2` usage
-error. `--json` prints a closed-structure result and never a traceback.
+Import/propose exit codes: `0` imported/duplicate/proposed, `1` rejected or
+conflict, `2` usage error. Replay exit codes: `0` reproduced, `1`
+not_reproduced, `2` rejected (admission/binding), `3` inconclusive (timeout,
+harness/collection failure, malformed or contradictory reports). `--json`
+prints a closed-structure object and never a traceback.
 
 `import` reads exactly one record file and the cited artifacts under
 `--evidence-root`; it writes only under `--store` and resolves no URL.
 `propose` reads only `--store` and writes one file under `<store>/proposals/`.
+`replay` reads the local git object database, the external suite and the
+explicit work root; it performs no fetch, opens no socket and never invokes
+Docker.
+
 
 ## Incident record (`factory-incident` v1)
 
@@ -117,7 +132,104 @@ produces the same file and reports `duplicate`.
 Every rejection is returned before a write; tests assert the store (or its
 absence) is byte-identical after each failure, including concurrent conflicts.
 
+## Replay: one evaluator-owned suite, two revisions
+
+Admission is explicit and ordered; a refusal happens before any Git read or
+process spawn:
+
+* `--approve-execution` is required (without it, exit 2, `approval_required`).
+* Both revisions are full 40-hex lowercase SHAs present in the local object
+  database, and they differ. No fetch is performed.
+* `--suite-digest` is a **required external** `sha256:<64 hex>`.
+* `--repo` is admitted by the factory's safe-repo-root policy; `--work-root` is
+  an existing empty directory outside the repository, suite and client home
+  root; `--out` must not exist and must not overlap them.
+* The suite lives outside `--repo` and the work root, is `<= 32` files,
+  `<= 256 KiB` each and `<= 1 MiB` total, has no symlinks, and contains only
+  `pytest.ini`, `test_*.py` and `expectations.json`.
+
+`expectations.json` (`factory-replay-expectations` v1) declares exactly one
+target and one or more controls:
+
+```json
+{"schema": {"name": "factory-replay-expectations", "version": 1},
+ "suite_id": "duplicate-json-key",
+ "suite_digest": "sha256:<64hex>",
+ "cases": [{"nodeid": "test_x.py::test_y",
+            "baseline": {"outcome": "assertion_failure"},
+            "candidate": {"outcome": "pass"}}],
+ "controls": [{"nodeid": "test_x.py::test_control",
+               "baseline": {"outcome": "pass"},
+               "candidate": {"outcome": "pass"}}],
+ "timeout_s": 120}
+```
+
+v1 replays exactly `assertion_failure -> pass`; a suite that declares anything
+else (including pass/pass) is `unsupported_suite`. Each side runs in a
+`git worktree add --detach` checkout; generated checkouts are **retained** (no
+destructive cleanup). The engine records the requested SHA, the checkout HEAD
+before and after, and the suite digest before execution, between sides and after
+execution; any drift is `rejected`.
+
+### The digest is non-circular
+
+`suite_digest` is `sha256:` over canonical JSON of the sorted
+`[{name, bytes, sha256}]` rows. For `expectations.json` the row hashes the
+canonical JSON of the parsed expectation object **without** the `suite_digest`
+field, so the file can carry its digest without hashing itself. The suite's own
+recorded digest must equal the recomputed one and the recomputed one must equal
+the caller's `--suite-digest`; editing expectations cannot authorize a new
+oracle.
+
+### Execution and the trusted phase report
+
+Each side runs the engine-owned bootstrap
+(`factory/_replay_child.py`), which removes its own source directory from
+`sys.path`, puts the checkout first, installs a **checkout import guard**
+(`factory/_replay_isolation.py`) that refuses to satisfy a missing `factory`
+submodule from the editable engine, loads `factory/replay_plugin.py` by absolute
+path, and calls `pytest.main(..., plugins=[recorder])`. Pytest runs with
+`-c pytest.ini --noconftest --rootdir . -p no:cacheprovider`, with
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`, a scrubbed environment (no
+`PYTEST_ADDOPTS`, `PYTEST_PLUGINS`, proxies or credentials), and a per-side
+`HOME`/`TMPDIR` inside the report directory. A preflight proves
+`factory.__file__` belongs to the checkout. Candidate commits therefore cannot
+contribute a plugin, conftest or ini option that changes the outcome.
+
+The plugin records pytest's own per-node **setup / call / teardown** outcomes
+and the real exception class, writes one nonce-bound JSON report, and is loaded
+outside both candidate trees. **Stdout is never parsed for status**; injected
+`PASSED`/`FAILED` text changes nothing. A verdict is `reproduced` only when:
+
+* both reports are present, nonce-bound, from the trusted plugin, with an exit
+  status that agrees with the process exit;
+* the collected node set is exactly the declared target plus controls (no
+  missing, duplicate or unexpected node);
+* no collection error, skip/xfail, setup/teardown failure or non-`AssertionError`
+  call failure occurred;
+* the target is call-phase `AssertionError` on baseline and `pass` on candidate;
+* every control passes on both sides;
+* the suite digest is unchanged before, between and after execution.
+
+Everything else is `not_reproduced` (well-formed but criteria unmet, including
+both-pass) or `inconclusive` (timeout, collection/harness failure, malformed or
+contradictory report). A nonzero exit alone never counts. On timeout the engine
+kills only the child's own process group (`start_new_session` + `SIGKILL`) and
+reaps it; no fixture child survives.
+
+### Report and gate interaction
+
+`<out>/replay-report.json` plus `replay-report.sha256` carry the verdict,
+reason, both requested SHAs, suite id/digest plus per-side digests, exact
+commands, exit codes, log/report hashes, per-node outcomes and the check list.
+The report states `"promotional": false` and `"acceptance_evidence": false` and
+is **not** an acceptance certificate: `factory-verify --artifacts-dir <out>`
+returns `manifest_missing`, and `factory-promote` returns
+`evidence_rejected:manifest_missing` without moving the target ref. Baseline RED
+remains diagnostic only; no verifier mode accepts it.
+
 ## Limits (stated, not solved)
+
 
 * Sensitive-content screening is **best effort**: bounded text fields reject
   control characters and PEM/secret-shaped material, but import only reads the
@@ -133,3 +245,16 @@ absence) is byte-identical after each failure, including concurrent conflicts.
   proves coverage of the observable, not that the stated cause is right.
 * The store is plain files. There is no database, daemon, scheduler, LLM call,
   deployment or push in this stage.
+* Replay is **not a sandbox**. Candidate code runs as the same UID with the host
+  filesystem and network reachable; the checkout import guard, `--noconftest`,
+  explicit config and scrubbed environment isolate pytest *configuration*, not
+  processes. Only reviewed suites at reviewed revisions may be replayed.
+* Generated replay checkouts are retained on purpose (v1 does no risky cleanup).
+  The work root must be an explicit empty directory; the operator owns its
+  later disposal.
+* Report hashes bind bytes to digests, not authorship. A same-UID actor who can
+  rewrite the report or store is outside the integrity boundary, as in
+  [evidence-gate.md](evidence-gate.md).
+* Deterministic Python cases only. Service-dependent, stochastic, timing,
+  model-quality and cost claims are out of scope; one run proves coverage of one
+  observable, not a root cause.

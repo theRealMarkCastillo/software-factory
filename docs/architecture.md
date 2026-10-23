@@ -11,6 +11,13 @@ runs the preflight gates, generates a `factory-*` project name, snapshots contai
 state, invokes Compose through `factory.policy`, collects logs, attempts teardown,
 checks postflight state, and writes and validates evidence.
 
+Evidence is schema-versioned (`factory-evidence` v2) and bound to a clean source
+revision, the immutable diff base the gates measured, the engine build that
+produced it, and hashed logs. `factory.verify` (`factory-verify`) re-checks an
+artifacts directory against an explicit candidate and base commit offline and
+read-only; see [the evidence gate](evidence-gate.md) for the checks, the closed
+reason-code set, and the stated limits (integrity is not same-UID attestation).
+
 The policy checks are a conservative supported subset of Compose. The loader does
 not implement the complete Compose merge specification; it validates each input
 before merging mappings and validates the merged model again. A file with an

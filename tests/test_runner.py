@@ -11,7 +11,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from factory import runner
+from factory.evidence import (
+    artifact_records,
+    assert_assembled_evidence,
+    engine_identity,
+)
+from factory.evidence import write_evidence_manifest as real_evidence_manifest
 from factory.policy import PolicyViolation, ProtectedProjectSnapshot
+
+CANDIDATE_SHA = "1" * 40
+BASE_SHA = "2" * 40
 
 
 def _repo(tmp_path):
@@ -21,6 +30,81 @@ def _repo(tmp_path):
         "services:\n  test:\n    image: python:3.11-slim\n    command: pytest -q\n"
     )
     return repo
+
+
+def _clean_runtime() -> dict:
+    return {
+        "teardown": {"attempted": True, "ok": True, "detail": ""},
+        "safety": {
+            "postflight": "clean",
+            "protected_changes": [],
+            "unexpected_changes": [],
+            "collateral_damage": False,
+        },
+    }
+
+
+def _v2_manifest(artifacts_dir, **kwargs) -> dict:
+    """A certifiable schema-v2 manifest, shaped like the real writer's output.
+
+    The lifecycle tests are about sequencing, not git state, so the source
+    snapshot is pinned clean here. The runner's own capture of start/end, base,
+    teardown and artifacts is asserted by the recording tests that use the real
+    writer against a real repository.
+    """
+    mode = kwargs.get("mode") or (
+        "acceptance" if kwargs.get("gates_run") else "diagnostic"
+    )
+    names = kwargs.get("artifacts")
+    if names is None:
+        names = [
+            name
+            for name in ("up.stdout.log", "up.stderr.log", "compose.log")
+            if (Path(artifacts_dir) / name).is_file()
+        ]
+    source = {"sha": CANDIDATE_SHA, "status_porcelain": ""}
+    base = kwargs.get("base") or {}
+    if not base.get("sha"):
+        # Non-git lifecycle fixtures cannot resolve a base; the mock stands in
+        # for a writer that did (the real capture is asserted separately).
+        base = {"ref": base.get("ref") or "main", "kind": "commit", "sha": BASE_SHA}
+    coverage = dict(kwargs.get("coverage") or {"status": "pass", "passed": True})
+    coverage.update(
+        base="main",
+        base_sha=base["sha"],
+        base_kind=base.get("kind") or "commit",
+    )
+    return {
+        "schema": {"name": "factory-evidence", "version": 2},
+        "mode": mode,
+        "generated_at": "2026-01-01T00:00:00Z",
+        "card_id": kwargs.get("card_id") or "card",
+        "project_name": kwargs.get("project_name") or "factory-card-abc123",
+        "source": {
+            "sha": source["sha"],
+            "clean": True,
+            "start": dict(source),
+            "end": dict(source),
+        },
+        "git_revision": source["sha"],
+        "git_status_porcelain": "",
+        "base": base,
+        "coverage": coverage,
+        "engine": engine_identity(),
+        "runtime": kwargs.get("runtime") or _clean_runtime(),
+        "artifacts": artifact_records(artifacts_dir, names) if names else [],
+        "entry_point": kwargs.get("entry_point") or "docker compose test service",
+        "command": kwargs.get("command") or ["docker", "compose", "up"],
+        "audit": kwargs.get("audit") or {"status": "pass", "passed": True},
+        "datamodel": kwargs.get("datamodel")
+        or {"status": "skipped", "reason": "no_data_model"},
+        "gates_run": kwargs.get("gates_run"),
+        "fixtures": [],
+        "execution": kwargs.get("execution")
+        or {"exit_code": 0, "passed": True, "stage": "complete"},
+        "environment": {"example_env": {"present": True}},
+        "hermes_factory_card": "card",
+    }
 
 
 def _snapshots(monkeypatch, before, after):
@@ -61,32 +145,11 @@ def _wire_successful_run(monkeypatch, tmp_path):
         "run_data_model_gate",
         lambda *a, **k: {"status": "pass", "passed": True},
     )
-    # Return a real path to a minimal valid manifest so the runner's
-    # evidence-enforcement read-back can exercise it.
-    manifest_file = tmp_path / "evidence-manifest.json"
-    manifest_file.write_text(
-        json.dumps(
-            {
-                "git_revision": "abc",
-                "entry_point": "docker compose test service",
-                "command": "docker compose up",
-                "environment": {"example_env": {"present": True}},
-                "fixtures": [],
-                "execution": {"exit_code": 0, "passed": True, "stage": "complete"},
-                "gates_run": True,
-                "audit": {"status": "pass"},
-                "coverage": {"status": "pass", "passed": True},
-                "datamodel": {"status": "skipped", "reason": "no_data_model"},
-            }
-        )
-    )
 
-    def write_manifest(*args, **kwargs):
-        manifest = json.loads(manifest_file.read_text())
-        for key in ("execution", "gates_run", "audit", "coverage", "datamodel"):
-            manifest[key] = kwargs.get(key)
-        manifest_file.write_text(json.dumps(manifest))
-        return manifest_file
+    def write_manifest(artifacts_dir, repo_path, **kwargs):
+        path = Path(artifacts_dir) / "evidence-manifest.json"
+        path.write_text(json.dumps(_v2_manifest(artifacts_dir, **kwargs)))
+        return path
 
     monkeypatch.setattr(runner, "write_evidence_manifest", write_manifest)
     return calls
@@ -405,10 +468,14 @@ def test_coverage_gate_skipped_when_no_added_python(tmp_path, monkeypatch):
 
     assert result.passed is True
     assert len(calls) == 2
-    assert result.gates["coverage"] == {
-        "status": "skipped",
-        "reason": "no_added_python",
-    }
+    coverage = result.gates["coverage"]
+    assert coverage["status"] == "skipped"
+    assert coverage["reason"] == "no_added_python"
+    # This fixture is not a git repo, so the base cannot resolve -- but the
+    # outcome is recorded rather than silently dropped (the resolved-SHA case
+    # is asserted in test_acceptance_run_records_source_base_runtime_and_artifacts).
+    assert coverage["base_kind"] == "unresolved"
+    assert coverage["base_sha"] == ""
     assert any("coverage gate skipped" in line for line in result.log)
 
 
@@ -502,33 +569,15 @@ def test_diff_has_added_python_false_when_no_lines_added(monkeypatch):
 def test_evidence_manifest_receives_gate_results(tmp_path, monkeypatch, capsys):
     """Gates pass -> manifest kwargs include audit/coverage gate dicts + gates_run."""
     captured = {}
-    manifest_file = tmp_path / "evidence-manifest.json"
-    manifest_file.write_text(
-        json.dumps(
-            {
-                "git_revision": "abc",
-                "entry_point": "docker compose test service",
-                "command": "docker compose up",
-                "environment": {"example_env": {"present": True}},
-                "fixtures": [],
-                "execution": {"exit_code": 0, "passed": True, "stage": "complete"},
-                "gates_run": True,
-                "audit": {"status": "pass"},
-                "coverage": {"status": "pass", "passed": True},
-                "datamodel": {"status": "skipped", "reason": "no_data_model"},
-            }
-        )
-    )
-
-    def fake_manifest(*args, **kwargs):
-        captured["audit"] = kwargs.get("audit")
-        captured["coverage"] = kwargs.get("coverage")
-        captured["gates_run"] = kwargs.get("gates_run")
-        return manifest_file
-
     _wire_successful_run(monkeypatch, tmp_path)
+    mock_writer = runner.write_evidence_manifest
+
+    def capturing_writer(artifacts_dir, repo_path, **kwargs):
+        captured.update(kwargs)
+        return mock_writer(artifacts_dir, repo_path, **kwargs)
+
+    monkeypatch.setattr(runner, "write_evidence_manifest", capturing_writer)
     _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
-    monkeypatch.setattr(runner, "write_evidence_manifest", fake_manifest)
     result = runner.run_factory_card(
         card_id="t_x",
         repo_path=str(_repo(tmp_path)),
@@ -726,7 +775,9 @@ def _git_repo(tmp_path):
     repo = _repo(tmp_path)
     (repo / ".env.example").write_text("REQUIRE_TLS=false\n")
     (repo / ".env").write_text("REQUIRE_TLS=false\n")
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    # A tracked source file so a test can dirty the tree during a run.
+    (repo / "app.py").write_text("value = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(
         [
@@ -791,7 +842,7 @@ def test_all_gates_pass_manifest_on_disk_passes_assembled_evidence(
     manifest = json.loads(manifest_file.read_text())
     assert manifest["audit"] and manifest["coverage"]  # non-empty gate sections
     assert manifest["gates_run"] is True
-    runner.assert_assembled_evidence(manifest)  # passes on read-back
+    assert_assembled_evidence(manifest)  # legacy reader still passes read-back
 
 
 @pytest.mark.parametrize("ungated", [True, False])
@@ -821,7 +872,7 @@ def test_real_manifest_preserves_diagnostics_but_rejects_uncertified_runs(
         (Path(result.artifacts_dir) / "evidence-manifest.json").read_text()
     )
     with pytest.raises(EvidenceError):
-        runner.assert_assembled_evidence(manifest)
+        assert_assembled_evidence(manifest)
 
 
 # ---------------------------------------------------------------------------
@@ -959,3 +1010,276 @@ def test_run_factory_card_compose_not_found_raises_policy_violation(tmp_path):
     msg = str(exc.value)
     assert str(repo / "does-not-exist.yml") in msg
     assert "repo-relative" in msg
+
+
+# ---------------------------------------------------------------------------
+# schema-v2 recording: mode, source start/end, base SHA, runtime, artifacts
+# ---------------------------------------------------------------------------
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_cli_rejects_explicit_acceptance_with_no_gates_before_any_work(
+    tmp_path, monkeypatch, capsys
+):
+    """--no-gates --mode acceptance is a usage error before gates or Docker."""
+    repo = _repo(tmp_path)
+    touched = []
+
+    def spy(name, payload):
+        def run(*args, **kwargs):
+            touched.append(name)
+            return payload
+
+        return run
+
+    monkeypatch.setattr(
+        runner, "run_dependency_audit", spy("audit", {"status": "pass"})
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_coverage_gate",
+        spy("coverage", {"status": "pass", "passed": True}),
+    )
+    monkeypatch.setattr(
+        runner, "run_data_model_gate", spy("datamodel", {"status": "pass"})
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_compose",
+        spy("docker", subprocess.CompletedProcess([], 0, "", "")),
+    )
+
+    rc = runner.main(
+        [
+            "--card",
+            "t_x",
+            "--repo",
+            str(repo),
+            "--compose",
+            "compose.yml",
+            "--no-gates",
+            "--mode",
+            "acceptance",
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+
+    assert rc == 2
+    assert touched == []
+    assert not (tmp_path / "artifacts").exists()
+    assert "--mode acceptance" in capsys.readouterr().err
+
+
+def test_run_factory_card_refuses_acceptance_mode_without_gates(tmp_path):
+    with pytest.raises(ValueError, match="acceptance"):
+        runner.run_factory_card(
+            "card",
+            str(_repo(tmp_path)),
+            ["compose.yml"],
+            artifacts_root=str(tmp_path / "artifacts"),
+            run_gates=False,
+            mode="acceptance",
+        )
+
+
+def test_acceptance_run_records_source_base_runtime_and_artifacts(
+    tmp_path, monkeypatch
+):
+    """The writer receives the run's real start/end snapshots, base, teardown, safety."""
+    repo = _git_repo(tmp_path)
+    head = _head(repo)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+    mock_writer = runner.write_evidence_manifest
+    captured = {}
+
+    def capturing_writer(artifacts_dir, repo_path, **kwargs):
+        captured.update(kwargs)
+        return mock_writer(artifacts_dir, repo_path, **kwargs)
+
+    monkeypatch.setattr(runner, "write_evidence_manifest", capturing_writer)
+
+    result = runner.run_factory_card(
+        "card", str(repo), ["compose.yml"], artifacts_root=str(tmp_path / "artifacts")
+    )
+
+    assert result.passed is True
+    assert result.mode == "acceptance"
+    assert captured["mode"] == "acceptance"
+    assert captured["source_start"] == {"sha": head, "status_porcelain": ""}
+    assert captured["source_end"] == captured["source_start"]
+    assert captured["base"] == {"ref": "main", "kind": "commit", "sha": head}
+    assert captured["runtime"]["teardown"] == {
+        "attempted": True,
+        "ok": True,
+        "detail": "",
+    }
+    assert captured["runtime"]["safety"] == {
+        "postflight": "clean",
+        "protected_changes": [],
+        "unexpected_changes": [],
+        "collateral_damage": False,
+    }
+    assert captured["artifacts"] == [
+        "up.stdout.log",
+        "up.stderr.log",
+        "compose.log",
+    ]
+    assert captured["execution"]["exit_code"] == 0
+    assert captured["execution"]["stage"] == "complete"
+    assert captured["project_name"] == "factory-card-abc123"
+    # The coverage gate was measured against the captured immutable base SHA.
+    assert captured["coverage"]["base_sha"] == head
+    assert captured["coverage"]["base_kind"] == "commit"
+
+
+def test_diagnostic_mode_records_mode_and_never_certifies(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+
+    result = runner.run_factory_card(
+        "card",
+        str(repo),
+        ["compose.yml"],
+        artifacts_root=str(tmp_path / "artifacts"),
+        run_gates=False,
+    )
+
+    assert result.mode == "diagnostic"
+    assert result.gates_run is False
+    assert result.passed is False
+    assert result.stage == "evidence_enforcement"
+    assert "mode_not_acceptance" in (result.error or "")
+    manifest = json.loads(
+        (Path(result.artifacts_dir) / "evidence-manifest.json").read_text()
+    )
+    assert manifest["mode"] == "diagnostic"
+    assert manifest["gates_run"] is False
+
+
+def test_cli_explicit_diagnostic_mode_with_gates_cannot_certify(
+    tmp_path, monkeypatch, capsys
+):
+    repo = _git_repo(tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+
+    rc = runner.main(
+        [
+            "--card",
+            "t_x",
+            "--repo",
+            str(repo),
+            "--compose",
+            "compose.yml",
+            "--mode",
+            "diagnostic",
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "diagnostic"
+    assert payload["gates_run"] is True
+    assert payload["passed"] is False
+    manifest = json.loads(
+        (Path(payload["artifacts_dir"]) / "evidence-manifest.json").read_text()
+    )
+    assert manifest["mode"] == "diagnostic"
+
+
+def test_source_change_during_run_is_recorded_and_rejected(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "write_evidence_manifest", real_evidence_manifest)
+
+    def dirtying_teardown(*args, **kwargs):
+        (repo / "app.py").write_text("value = 999\n")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(runner, "teardown", dirtying_teardown)
+
+    result = runner.run_factory_card(
+        "card", str(repo), ["compose.yml"], artifacts_root=str(tmp_path / "artifacts")
+    )
+
+    assert result.passed is False
+    assert result.stage == "evidence_enforcement"
+    assert "source_changed_during_run" in (result.error or "")
+    manifest = json.loads(
+        (Path(result.artifacts_dir) / "evidence-manifest.json").read_text()
+    )
+    assert manifest["source"]["clean"] is False
+    assert manifest["source"]["end"]["status_porcelain"] != ""
+    assert manifest["source"]["start"]["status_porcelain"] == ""
+
+
+def test_teardown_failure_is_recorded_in_the_manifest(tmp_path, monkeypatch):
+    repo = _git_repo(tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "write_evidence_manifest", real_evidence_manifest)
+    monkeypatch.setattr(
+        runner,
+        "teardown",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 1, "", "down failed"),
+    )
+
+    result = runner.run_factory_card(
+        "card", str(repo), ["compose.yml"], artifacts_root=str(tmp_path / "artifacts")
+    )
+
+    assert result.passed is False
+    manifest = json.loads(
+        (Path(result.artifacts_dir) / "evidence-manifest.json").read_text()
+    )
+    assert manifest["runtime"]["teardown"]["attempted"] is True
+    assert manifest["runtime"]["teardown"]["ok"] is False
+    assert "1" in manifest["runtime"]["teardown"]["detail"]
+
+
+def test_runner_enforcement_requires_schema_v2_not_the_legacy_reader(
+    tmp_path, monkeypatch
+):
+    """A v1 manifest the legacy reader accepts still cannot certify a run."""
+    repo = _git_repo(tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    _wire_successful_run(monkeypatch, tmp_path)
+    legacy_manifest = {
+        "git_revision": "abc",
+        "entry_point": "docker compose test service",
+        "command": "docker compose up",
+        "environment": {"example_env": {"present": True}},
+        "fixtures": [],
+        "execution": {"exit_code": 0, "passed": True, "stage": "complete"},
+        "gates_run": True,
+        "audit": {"status": "pass"},
+        "coverage": {"status": "pass", "passed": True},
+        "datamodel": {"status": "skipped", "reason": "no_data_model"},
+    }
+    assert assert_assembled_evidence(legacy_manifest) is None  # old reader
+    legacy_path = tmp_path / "legacy-evidence.json"
+    legacy_path.write_text(json.dumps(legacy_manifest))
+    monkeypatch.setattr(runner, "write_evidence_manifest", lambda *a, **k: legacy_path)
+
+    result = runner.run_factory_card(
+        "card", str(repo), ["compose.yml"], artifacts_root=str(tmp_path / "artifacts")
+    )
+
+    assert result.passed is False
+    assert result.stage == "evidence_enforcement"
+    assert "legacy_schema_unsupported" in (result.error or "")

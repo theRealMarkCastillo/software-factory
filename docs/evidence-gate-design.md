@@ -250,12 +250,18 @@ no writes, no hooks.
 ```python
 GATE_POLICY = {
     # gate: (required fields, permitted inapplicable "status:reason" -> justification)
-    "audit":     ({"status": "pass"},
-                  {"no_manifest": "no supported dependency manifest in the subject"}),
-    "coverage":  ({"status": "pass", "passed": True},
-                  {"skipped:no_added_python": "diff vs base adds no python lines"}),
-    "datamodel": ({"status": "pass"},
-                  {"skipped:no_data_model": "subject has no data-model.yml"}),
+    "audit": (
+        {"status": "pass"},
+        {"no_manifest": "no supported dependency manifest in the subject"},
+    ),
+    "coverage": (
+        {"status": "pass", "passed": True},
+        {"skipped:no_added_python": "diff vs base adds no python lines"},
+    ),
+    "datamodel": (
+        {"status": "pass"},
+        {"skipped:no_data_model": "subject has no data-model.yml"},
+    ),
 }
 ```
 

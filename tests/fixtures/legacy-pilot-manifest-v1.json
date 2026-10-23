@@ -1,0 +1,43 @@
+{
+  "audit": {
+    "detail": "no python/js dependency manifest found in repo",
+    "findings": [],
+    "language": "unknown",
+    "status": "no_manifest",
+    "tool": ""
+  },
+  "command": [
+    "docker",
+    "compose",
+    "up",
+    "--build",
+    "--abort-on-container-exit",
+    "--exit-code-from",
+    "test"
+  ],
+  "coverage": {},
+  "entry_point": "docker compose test service",
+  "environment": {
+    "example_env": {
+      "path": "<BOARDS>/software-factory/workspaces/t_10deb746/services/api/tests/inventory-gate.environment.example",
+      "present": true,
+      "sha256": "344de72e2f59beba70f5e7e261453cad1dba85f7f001c394931da437ab070a92"
+    },
+    "runtime_env": {
+      "path": "<BOARDS>/software-factory/workspaces/t_10deb746/.env",
+      "present": false
+    },
+    "runtime_env_diff_recorded": false,
+    "runtime_env_present": false
+  },
+  "execution": {
+    "exit_code": 0,
+    "passed": true,
+    "stage": "complete"
+  },
+  "fixtures": [],
+  "gates_run": true,
+  "git_revision": "65d4474c6871d21ceca4d1eb4832046131f3c49f",
+  "git_status_porcelain": "M services/api/src/migrate.ts\n M services/api/tests/tenant_context.test.ts\n?? compose.inventory-gate.yml\n?? database/migrations/010_inventory_asset_kinds.sql\n?? services/api/tests/Dockerfile.inventory-gate\n?? services/api/tests/inventory-gate.environment.example\n?? services/api/tests/inventory_kinds_pg.gate.ts",
+  "hermes_factory_card": ""
+}

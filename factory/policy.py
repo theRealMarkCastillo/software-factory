@@ -229,8 +229,8 @@ def assert_safe_command(command_str: str) -> None:
             )
 
 
-# Host path roots no factory bind-mount may ever touch. Applies to BOTH
-# absolute sources and relative sources after resolution against the repo.
+# Host path roots no factory bind-mount may ever touch. Applies to absolute
+# sources and to relative sources after resolution against the repo root.
 SENSITIVE_HOST_ROOTS = (
     "/etc",
     "/var",
@@ -243,11 +243,35 @@ SENSITIVE_HOST_ROOTS = (
     "/dev",
 )
 
+# System roots a relative source may never resolve into. The narrow exception
+# for repository-relative mounts covers only checkouts nested below a user's
+# home directory (``/Users/<user>/...`` or ``/home/<user>/...``); a checkout
+# rooted at or under one of these system paths gets no relative-mount
+# exception. ``/Users`` and ``/home`` themselves are rejected as repository
+# roots by the immediate-home check.
+SENSITIVE_SYSTEM_ROOTS = (
+    "/etc",
+    "/private/etc",
+    "/var",
+    "/run",
+    "/dev",
+    "/root",
+    "/proc",
+    "/sys",
+)
+
+# Prefixes whose immediate child is a user home directory. A repository must
+# be nested at least one level below the home directory to qualify for the
+# relative-mount exception.
+HOME_ROOT_PREFIXES = ("/Users", "/home")
+
 # Repo-relative subtrees that carry credentials, VCS metadata, or registry
 # tokens. A repository checked out under a home root may mount its own
 # ordinary files, but never these subtrees.
 SENSITIVE_REPO_SUBPATHS = (
     ".git",
+    ".git-credentials",
+    ".gitconfig",
     ".ssh",
     ".aws",
     ".gnupg",
@@ -260,9 +284,71 @@ SENSITIVE_REPO_SUBPATHS = (
     "secrets",
 )
 
+# The whole ``.env`` family (``.env.local``, ``.env.production``, ...) carries
+# environment credentials, so these names match by prefix rather than by exact
+# component identity.
+SENSITIVE_REPO_PREFIXES = (".env",)
+
 # The repo containing this policy module; relative bind-mount sources are
 # resolved against it.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _is_sensitive_component(part: str) -> bool:
+    lowered = part.lower()
+    return lowered in SENSITIVE_REPO_SUBPATHS or lowered.startswith(
+        SENSITIVE_REPO_PREFIXES
+    )
+
+
+def _is_immediate_home_dir(path: Path) -> bool:
+    for prefix in HOME_ROOT_PREFIXES:
+        base = Path(prefix)
+        if path != base and path.is_relative_to(base):
+            return len(path.relative_to(base).parts) == 1
+    return False
+
+
+def _is_home_checkout(root: Path) -> bool:
+    """True only for a checkout nested below a user's home directory."""
+    for system_root in SENSITIVE_SYSTEM_ROOTS:
+        sroot = Path(system_root)
+        if root == sroot or root == sroot.resolve() or root.is_relative_to(sroot):
+            return False
+    for prefix in HOME_ROOT_PREFIXES:
+        base = Path(prefix)
+        if root != base and root.is_relative_to(base):
+            return len(root.relative_to(base).parts) >= 2
+    return False
+
+
+def assert_safe_repo_root(repo_root: Path | str) -> None:
+    """Reject repository roots that must never anchor a relative bind mount.
+
+    A subject repository may live in an ordinary checkout, but it may not be
+    the host root, a sensitive host root, the operator's home directory, or an
+    immediate home directory (``/Users/<user>``). The runner calls this before
+    Compose validation so a sensitive ``repo_path`` never reaches file
+    resolution or Docker.
+    """
+    root = Path(repo_root).expanduser().resolve()
+    if root == Path("/"):
+        raise PolicyViolation(
+            f"repository root '{root}' is the host root; refusing to treat the "
+            f"whole filesystem as a subject repository"
+        )
+    for sensitive in SENSITIVE_HOST_ROOTS:
+        sroot = Path(sensitive)
+        if root == sroot or root == sroot.resolve():
+            raise PolicyViolation(
+                f"repository root '{root}' is sensitive host path '{sensitive}'; "
+                f"refusing to treat a system path as a subject repository"
+            )
+    if root == Path.home().resolve() or _is_immediate_home_dir(root):
+        raise PolicyViolation(
+            f"repository root '{root}' is a user home directory; a subject "
+            f"repository must be nested below it"
+        )
 
 
 def _check_sensitive_repo_subpath(
@@ -274,11 +360,118 @@ def _check_sensitive_repo_subpath(
     except ValueError:  # pragma: no cover - callers prove containment first
         return
     for part in relative.parts:
-        if part.lower() in SENSITIVE_REPO_SUBPATHS:
+        if _is_sensitive_component(part):
             raise PolicyViolation(
                 f"{where}mounting sensitive repository path '{source}' "
                 f"(resolves to '{resolved}') is forbidden"
             )
+
+
+def _check_bind_contents(resolved: Path, root: Path, source: str, where: str) -> None:
+    """Inspect a relative mount source by path metadata only.
+
+    The mounted tree may not contain credential/VCS names at any depth, and no
+    symlink may point at the repository root, out of the repository, or into a
+    sensitive subtree. Directory entries are inspected with ``os.scandir``;
+    file *contents* are never read. Traversal follows only directories and
+    de-duplicates resolved paths, so symlink cycles terminate. Any entry that
+    cannot be inspected fails closed.
+    """
+    try:
+        exists = resolved.exists()
+    except OSError as exc:
+        raise PolicyViolation(
+            f"{where}cannot stat relative bind-mount source '{source}' "
+            f"('{resolved}': {exc}); failing closed"
+        ) from exc
+    if not exists:
+        raise PolicyViolation(
+            f"{where}relative bind-mount source '{source}' does not exist "
+            f"under '{root}'; create it before validation or mount an "
+            f"existing path"
+        )
+    if not resolved.is_dir():
+        return
+
+    pending = [resolved]
+    seen: set[Path] = set()
+    while pending:
+        current = pending.pop()
+        try:
+            real = current.resolve(strict=True)
+            if real in seen:
+                continue
+            seen.add(real)
+            if real != root and not real.is_relative_to(root):
+                raise PolicyViolation(
+                    f"{where}relative bind-mount source '{source}' resolves "
+                    f"outside the repo root '{root}' at '{current}' -- "
+                    f"relative escapes are forbidden"
+                )
+            with os.scandir(real) as entries:
+                items = list(entries)
+        except OSError as exc:
+            raise PolicyViolation(
+                f"{where}cannot inspect relative bind-mount source '{source}' "
+                f"at '{current}' ({exc}); failing closed rather than mounting "
+                f"a tree whose contents cannot be verified"
+            ) from exc
+
+        for entry in items:
+            if _is_sensitive_component(entry.name):
+                raise PolicyViolation(
+                    f"{where}relative bind-mount source '{source}' contains "
+                    f"sensitive path '{entry.path}' (credential or metadata "
+                    f"subtree)"
+                )
+            try:
+                is_symlink = entry.is_symlink()
+                is_dir = entry.is_dir(follow_symlinks=False)
+            except OSError as exc:
+                raise PolicyViolation(
+                    f"{where}cannot inspect '{entry.path}' inside bind-mount "
+                    f"source '{source}' ({exc}); failing closed"
+                ) from exc
+            if is_symlink:
+                try:
+                    target = Path(entry.path).resolve(strict=True)
+                except OSError as exc:
+                    raise PolicyViolation(
+                        f"{where}bind-mount source '{source}' contains an "
+                        f"unresolvable symlink '{entry.path}' ({exc}); failing "
+                        f"closed"
+                    ) from exc
+                if target == root:
+                    raise PolicyViolation(
+                        f"{where}bind-mount source '{source}' contains symlink "
+                        f"'{entry.path}' pointing at the repository root; "
+                        f"repository-root mounts are forbidden"
+                    )
+                if not target.is_relative_to(root):
+                    raise PolicyViolation(
+                        f"{where}bind-mount source '{source}' contains symlink "
+                        f"'{entry.path}' resolving outside the repo root "
+                        f"'{root}' to '{target}' -- symlink escapes are "
+                        f"forbidden"
+                    )
+                for part in target.relative_to(root).parts:
+                    if _is_sensitive_component(part):
+                        raise PolicyViolation(
+                            f"{where}bind-mount source '{source}' contains "
+                            f"symlink '{entry.path}' pointing into sensitive "
+                            f"repository path '{target}'"
+                        )
+                try:
+                    target_is_dir = target.is_dir()
+                except OSError as exc:
+                    raise PolicyViolation(
+                        f"{where}cannot inspect symlink target '{target}' inside "
+                        f"bind-mount source '{source}' ({exc}); failing closed"
+                    ) from exc
+                if target_is_dir:
+                    pending.append(target)
+            elif is_dir:
+                pending.append(Path(entry.path))
 
 
 def check_bind_source(
@@ -293,12 +486,14 @@ def check_bind_source(
     /Users, /home, ...), checked both raw and resolved so symlink indirection
     is caught.
 
-    Relative sources are resolved against the repo root. They must stay inside
-    that repo root (catching traversal and symlink escapes) and must not touch
-    a credential or VCS subpath of the repo. A repository may legitimately be
-    checked out under /Users or /home, so containment in the repo -- not the
-    host root prefix -- decides whether a relative source is allowed; the
-    absolute form of the same path is still rejected.
+    Relative sources are resolved against the repo root. The exception is
+    deliberately narrow: the repo must be a real checkout nested below a user
+    home directory (``/Users/<user>/...`` or ``/home/<user>/...``). The
+    source must exist, stay inside the repo root (catching traversal and
+    symlink escapes), not resolve to the repo root itself, and not name or
+    contain a credential/VCS subtree. Anything else -- including repositories
+    under system roots such as ``/etc`` or ``/var`` -- fails closed. The
+    absolute spelling of a home-checked-out path is still rejected.
     """
     where = f"service '{name}': " if name else ""
     # Named volume: bare identifier, no separators at all.
@@ -308,6 +503,14 @@ def check_bind_source(
     src_path = Path(source).expanduser()
 
     if not src_path.is_absolute():
+        assert_safe_repo_root(root)
+        if not _is_home_checkout(root):
+            raise PolicyViolation(
+                f"{where}relative bind-mount source '{source}' is only allowed "
+                f"for a checkout nested under a user home directory "
+                f"(/Users/<user>/... or /home/<user>/...); repo root '{root}' "
+                f"is not"
+            )
         resolved = (root / src_path).resolve()
         if resolved != root and not resolved.is_relative_to(root):
             raise PolicyViolation(
@@ -315,7 +518,14 @@ def check_bind_source(
                 f"'{resolved}', outside the repo root '{root}' -- relative "
                 f"escapes are forbidden"
             )
+        if resolved == root:
+            raise PolicyViolation(
+                f"{where}mounting the repository root ('{source}' resolves to "
+                f"'{resolved}') is forbidden; mount an ordinary subdirectory "
+                f"instead"
+            )
         _check_sensitive_repo_subpath(resolved, root, source, where)
+        _check_bind_contents(resolved, root, source, where)
         return
 
     resolved = src_path.resolve()

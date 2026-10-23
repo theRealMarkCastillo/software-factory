@@ -329,29 +329,29 @@ def test_snapshot_classifies_known_and_unknown_changes_separately():
 # ---------------------------------------------------------------------------
 
 
-def test_compose_rejects_relative_escape_outside_repo(tmp_path):
+def test_compose_rejects_relative_escape_outside_repo(home_checkout):
     cfg = {"services": {"app": {"volumes": ["../../etc:/host"]}}}
     with pytest.raises(PolicyViolation):
-        assert_safe_compose_file(cfg, repo_root=str(tmp_path))
+        assert_safe_compose_file(cfg, repo_root=str(home_checkout))
 
 
-def test_compose_rejects_relative_sibling_escape(tmp_path):
+def test_compose_rejects_relative_sibling_escape(home_checkout):
     cfg = {"services": {"app": {"volumes": ["../sibling:/x"]}}}
     with pytest.raises(PolicyViolation):
-        assert_safe_compose_file(cfg, repo_root=str(tmp_path))
+        assert_safe_compose_file(cfg, repo_root=str(home_checkout))
 
 
-def test_compose_accepts_relative_mount_inside_repo(tmp_path):
-    (tmp_path / "data").mkdir()
+def test_compose_accepts_relative_mount_inside_repo(home_checkout):
+    (home_checkout / "data").mkdir()
     cfg = {"services": {"app": {"volumes": ["./data:/app"]}}}
-    assert_safe_compose_file(cfg, repo_root=str(tmp_path))  # should not raise
+    assert_safe_compose_file(cfg, repo_root=str(home_checkout))  # should not raise
 
 
-def test_compose_rejects_relative_symlink_to_sensitive_root(tmp_path):
-    (tmp_path / "link").symlink_to("/etc", target_is_directory=True)
+def test_compose_rejects_relative_symlink_to_sensitive_root(home_checkout):
+    (home_checkout / "link").symlink_to("/etc", target_is_directory=True)
     cfg = {"services": {"app": {"volumes": ["./link:/x"]}}}
     with pytest.raises(PolicyViolation):
-        assert_safe_compose_file(cfg, repo_root=str(tmp_path))
+        assert_safe_compose_file(cfg, repo_root=str(home_checkout))
 
 
 def test_compose_keeps_named_volume_skip_with_repo_root(tmp_path):
@@ -420,31 +420,31 @@ def test_run_compose_allows_legit_service_level_args(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_bind_source_rejects_traversal_outside_repo(tmp_path):
+def test_bind_source_rejects_traversal_outside_repo(home_checkout):
     with pytest.raises(PolicyViolation) as exc:
-        check_bind_source("../../etc", repo_root=tmp_path)
+        check_bind_source("../../etc", repo_root=home_checkout)
     assert "../../etc" in str(exc.value)
 
 
-def test_bind_source_rejects_parent_sibling(tmp_path):
+def test_bind_source_rejects_parent_sibling(home_checkout):
     with pytest.raises(PolicyViolation):
-        check_bind_source("../sibling", repo_root=tmp_path)
+        check_bind_source("../sibling", repo_root=home_checkout)
 
 
-def test_bind_source_allows_relative_inside_repo(tmp_path):
-    (tmp_path / "data").mkdir()
-    check_bind_source("./data", repo_root=tmp_path)  # should not raise
+def test_bind_source_allows_relative_inside_repo(home_checkout):
+    (home_checkout / "data").mkdir()
+    check_bind_source("./data", repo_root=home_checkout)  # should not raise
 
 
 def test_bind_source_named_volume_still_skipped():
     check_bind_source("mydata", repo_root=None)  # should not raise
 
 
-def test_bind_source_symlink_escape_rejected(tmp_path):
-    link = tmp_path / "escape"
+def test_bind_source_symlink_escape_rejected(home_checkout):
+    link = home_checkout / "escape"
     link.symlink_to("/etc")
     with pytest.raises(PolicyViolation):
-        check_bind_source("./escape", repo_root=tmp_path)
+        check_bind_source("./escape", repo_root=home_checkout)
 
 
 def test_compose_file_relative_volume_traversal_rejected():
@@ -453,9 +453,7 @@ def test_compose_file_relative_volume_traversal_rejected():
         assert_safe_compose_file(cfg)
 
 
-def test_compose_file_relative_volume_inside_repo_accepted(tmp_path, monkeypatch):
-    import factory.policy as pm
-
-    monkeypatch.setattr(pm, "_REPO_ROOT", tmp_path)
+def test_compose_file_relative_volume_inside_repo_accepted(home_checkout):
+    (home_checkout / "data").mkdir()
     cfg = {"services": {"app": {"volumes": ["./data:/app"]}}}
-    assert_safe_compose_file(cfg)  # should not raise
+    assert_safe_compose_file(cfg, repo_root=home_checkout)  # should not raise

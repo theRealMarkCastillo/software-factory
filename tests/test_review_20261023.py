@@ -196,8 +196,10 @@ class TestRepoLocalBindPolicy:
         """A repository-relative mount stays legal whatever the checkout root."""
         policy.check_bind_source("./docs", repo_root=REPO_ROOT)
 
-    def test_repo_root_itself_can_be_mounted(self):
-        policy.check_bind_source(".", repo_root=REPO_ROOT)
+    def test_repo_root_itself_cannot_be_mounted(self):
+        """A repo-root mount would expose every credential/VCS subtree."""
+        with pytest.raises(PolicyViolation, match="repository root"):
+            policy.check_bind_source(".", repo_root=REPO_ROOT)
 
     def test_compose_relative_mount_inside_repo_is_allowed(self):
         policy.assert_safe_compose_file(
@@ -205,15 +207,24 @@ class TestRepoLocalBindPolicy:
             repo_root=REPO_ROOT,
         )
 
-    @pytest.mark.parametrize("home_root", [Path("/Users"), Path("/home")])
-    def test_home_rooted_repo_may_mount_its_own_relative_paths(self, home_root):
-        """A checkout under /Users or /home is not itself a forbidden mount."""
-        repo = home_root / "worker" / "subject-repo"
-        policy.check_bind_source("./data", repo_root=repo)
-        policy.check_bind_source(".", repo_root=repo)
-        policy.assert_safe_compose_file(
-            {"services": {"app": {"volumes": ["./data:/data:ro"]}}}, repo_root=repo
+    def test_home_checkout_may_mount_its_own_ordinary_subdirectories(
+        self, home_checkout
+    ):
+        """A checkout *nested* under /Users or /home keeps relative mounts."""
+        assert any(
+            home_checkout.is_relative_to(prefix)
+            for prefix in (Path("/Users"), Path("/home"))
         )
+        (home_checkout / "data").mkdir()
+        policy.check_bind_source("./data", repo_root=home_checkout)
+        policy.assert_safe_compose_file(
+            {"services": {"app": {"volumes": ["./data:/data:ro"]}}},
+            repo_root=home_checkout,
+        )
+
+    def test_home_checkout_still_cannot_mount_its_own_root(self, home_checkout):
+        with pytest.raises(PolicyViolation, match="repository root"):
+            policy.check_bind_source(".", repo_root=home_checkout)
 
     @pytest.mark.parametrize("home_root", [Path("/Users"), Path("/home")])
     def test_home_rooted_repo_absolute_spelling_is_still_rejected(self, home_root):
@@ -241,19 +252,17 @@ class TestRepoLocalBindPolicy:
         with pytest.raises(PolicyViolation, match="outside the repo root"):
             policy.check_bind_source(source, repo_root=REPO_ROOT)
 
-    def test_relative_symlink_to_sensitive_root_is_rejected(self, tmp_path):
-        (tmp_path / "link").symlink_to("/etc", target_is_directory=True)
+    def test_relative_symlink_to_sensitive_root_is_rejected(self, home_checkout):
+        (home_checkout / "link").symlink_to("/etc", target_is_directory=True)
         with pytest.raises(PolicyViolation, match="outside the repo root"):
-            policy.check_bind_source("./link", repo_root=tmp_path)
+            policy.check_bind_source("./link", repo_root=home_checkout)
 
-    def test_relative_symlink_out_of_repo_is_rejected(self, tmp_path):
+    def test_relative_symlink_out_of_repo_is_rejected(self, home_checkout, tmp_path):
         outside = tmp_path / "sibling"
         outside.mkdir()
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / "escape").symlink_to(outside, target_is_directory=True)
+        (home_checkout / "escape").symlink_to(outside, target_is_directory=True)
         with pytest.raises(PolicyViolation, match="outside the repo root"):
-            policy.check_bind_source("./escape", repo_root=repo)
+            policy.check_bind_source("./escape", repo_root=home_checkout)
 
     @pytest.mark.parametrize(
         "source",
@@ -278,8 +287,9 @@ class TestRepoLocalBindPolicy:
             policy.check_bind_source(source, repo_root=REPO_ROOT)
 
     @pytest.mark.parametrize("source", ["./data", "./config", "./docs", "./src/app"])
-    def test_ordinary_repo_subdirectories_remain_mountable(self, source):
-        policy.check_bind_source(source, repo_root=REPO_ROOT)
+    def test_ordinary_repo_subdirectories_remain_mountable(self, home_checkout, source):
+        (home_checkout / source).mkdir(parents=True)
+        policy.check_bind_source(source, repo_root=home_checkout)
 
     def test_named_volume_still_skipped(self):
         policy.check_bind_source("mydata", repo_root=REPO_ROOT)

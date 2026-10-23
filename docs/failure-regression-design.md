@@ -1,6 +1,43 @@
 # Failure-to-regression design: incident intake and diagnostic replay
 
-Status: design contract for implementation (card `t_9ab43e5e`). Source base
+Status: accepted by Arx with the binding corrections below; design card `t_9ab43e5e`.
+
+## Binding operator corrections (override conflicting text below)
+
+1. Do NOT classify failures by grepping stdout. An engine-owned pytest reporting
+   plugin outside subject trees must capture per-node setup/call/teardown outcomes
+   and actual exception class via hooks. Only call-phase AssertionError in the
+   expected target with clean setup/teardown and passing controls is reproduction.
+   Missing/duplicate/unexpected nodes, skips/xfails, collection failure, malformed
+   or incomplete report never reproduce. Exit and report must agree.
+2. Disable plugin autoload and inherited pytest options. Use explicit trusted plugin,
+   minimal documented environment, scrub credentials/PYTHONPATH/PYTEST_ADDOPTS.
+   Preflight checks module.__file__, not bare __file__. This is NOT a hostile-code
+   sandbox: explicit approval covers reviewed suite AND both source revisions.
+3. Non-circular suite digest: canonical sorted file names/content hashes including
+   expectations with only suite_digest omitted. Require external --suite-digest;
+   verify before/between/after executions. The suite cannot rewrite expectations
+   and its own digest to authorize changes. Target must transition assertion_failure
+   to pass; both-pass is not improvement.
+4. Serialize imports per fingerprint with exclusive coordination; no age-based lock
+   stealing. Concurrent conflicting imports cannot both succeed. Validate supplied
+   ids against recomputed values and stored content before proposal. Corrections
+   cite existing same-incident content ids; no silent overwrite/history relinking.
+5. Do not blanket-reject /Users or /home descendants using SENSITIVE_HOST_ROOTS.
+   Reuse safe-root semantics for ordinary subdirectories, reject actual root/secret
+   paths and symlink escapes. Validate store ancestors and generated paths; never
+   follow planted incidents/proposals symlinks.
+6. Use safe git-managed checkouts or validate archive members before extraction.
+   Work only under explicit owned empty root. Retain generated replay trees in v1
+   rather than risky cleanup; no prune/deleting existing worktrees. Timeout kills
+   and reaps only the launched process group. Preserve all diagnostic artifacts.
+7. Sensitive-content detection is best effort, not guaranteed redaction. Import
+   only explicitly selected bounded artifacts; never auto-ingest transcripts/env.
+   Injection-like prose is inert data, never commands or authority.
+8. If helpers need public names, retain existing private aliases for compatibility.
+   No unrelated evidence refactor. Verifier/promoter must still reject replay output.
+
+Source base
 `f90af08906583a5ebe13a7acf0bc65aa18d53a99`; plan
 `arx-docs/specs/2026-10-23-factory-failure-regression-plan.md`. Adds no
 acceptance path, no second gate, no Docker execution.

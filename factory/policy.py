@@ -15,14 +15,16 @@ Compose project on this host.
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-# Example protected project names. Replace with this host's project names
-# before using the runner. Changes to any non-factory project already fail
+# Example protected project names. Add host-specific protection using
+# FACTORY_HOST_CONFIG; configuration never removes these defaults. Changes to any non-factory project already fail
 # postflight; this set classifies those that require a durable incident marker.
 PROTECTED_PROJECTS = {
     "example-production",
@@ -49,6 +51,49 @@ BANNED_COMMAND_FRAGMENTS = (
 
 class PolicyViolation(RuntimeError):
     """Raised when a requested Docker operation violates factory policy."""
+
+
+def _host_config() -> dict:
+    """Read only an explicitly selected operator configuration, never repo discovery."""
+    filename = os.environ.get("FACTORY_HOST_CONFIG")
+    if filename is None:
+        return {}
+    try:
+        path = Path(filename).expanduser()
+        if not filename or not path.is_absolute():
+            raise ValueError("path must be absolute")
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict) or set(data) - {
+            "protected_projects",
+            "reserved_host_ports",
+        }:
+            raise ValueError("expected protected_projects and/or reserved_host_ports")
+        projects = data.get("protected_projects", [])
+        ports = data.get("reserved_host_ports", [])
+        if not isinstance(projects, list) or any(
+            not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name)
+            for name in projects
+        ):
+            raise ValueError(
+                "protected_projects must be a list of Compose project names"
+            )
+        if not isinstance(ports, list) or any(
+            type(port) is not int or not 1 <= port <= 65535 for port in ports
+        ):
+            raise ValueError("reserved_host_ports must be a list of ports in 1..65535")
+        return data
+    except (OSError, ValueError) as exc:
+        raise PolicyViolation(f"invalid host config: {exc}") from exc
+
+
+def protected_projects() -> set[str]:
+    return PROTECTED_PROJECTS | set(_host_config().get("protected_projects", []))
+
+
+def reserved_host_ports() -> set[int]:
+    return FACTORY_RESERVED_HOST_PORTS | set(
+        _host_config().get("reserved_host_ports", [])
+    )
 
 
 @dataclass
@@ -121,8 +166,9 @@ class ProtectedProjectSnapshot:
         warnings because a busy host can change them independently of a run.
         """
         report = {"protected": [], "unexpected": []}
+        protected = protected_projects()
         for project in sorted(set(self.projects) | set(other.projects)):
-            if FACTORY_PROJECT_PATTERN.match(project):
+            if FACTORY_PROJECT_PATTERN.match(project) and project not in protected:
                 # Factory-owned: its create/destroy lifecycle is the runner's own
                 # responsibility, not collateral damage (a concurrent factory run
                 # is legitimate and must not trip this check).
@@ -130,9 +176,7 @@ class ProtectedProjectSnapshot:
             before = self.projects.get(project, [])
             after = other.projects.get(project, [])
             if before != after:
-                category = (
-                    "protected" if project in PROTECTED_PROJECTS else "unexpected"
-                )
+                category = "protected" if project in protected else "unexpected"
                 report[category].append(
                     f"project '{project}' changed: before={before} after={after}"
                 )
@@ -148,7 +192,7 @@ def assert_factory_project(project_name: str) -> None:
     """Raise PolicyViolation unless project_name is a factory-owned, non-protected name."""
     if not project_name:
         raise PolicyViolation("empty project name")
-    if project_name in PROTECTED_PROJECTS:
+    if project_name in protected_projects():
         raise PolicyViolation(
             f"refusing to operate on protected project '{project_name}'"
         )
@@ -616,7 +660,7 @@ def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
     """
     if avoid != "CONFLICT":
         allowlist = [int(p) for p in str(avoid).split(",") if p.strip()]
-        used = get_host_ports_in_use() | FACTORY_RESERVED_HOST_PORTS
+        used = get_host_ports_in_use() | reserved_host_ports()
         free = [p for p in allowlist if p not in used]
         if len(free) != len(allowlist):
             taken = [p for p in allowlist if p not in free]
@@ -699,7 +743,7 @@ def _acquire_port_lock():
 
 
 def _is_factory_port_free(port: int) -> bool:
-    if port in FACTORY_RESERVED_HOST_PORTS:
+    if port in reserved_host_ports():
         return False
     # lsof: is any HOST process bound to this port?
     import subprocess as _sp

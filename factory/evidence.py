@@ -187,12 +187,17 @@ class _Malformed(Exception):
 # ---------------------------------------------------------------------------
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path | str) -> str:
+    """SHA-256 hex digest of a file's bytes (public, reused by learning)."""
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
+    with Path(path).open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+#: Back-compat alias: existing evidence call sites keep the private name.
+_sha256 = sha256_file
 
 
 def _git_argv(args: Iterable[str]) -> list[str]:
@@ -1174,8 +1179,8 @@ def _substantiate_claim(
     return f"no substantiation rule for {claim.gate}:{claim.key}"
 
 
-class _StrictManifestError(ValueError):
-    """Manifest bytes are not one unambiguous JSON object (internal signal)."""
+class StrictJsonError(ValueError):
+    """Document bytes are not one unambiguous JSON value (public signal)."""
 
 
 def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
@@ -1195,28 +1200,34 @@ def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
     return members
 
 
-def _parse_manifest_bytes(raw: bytes) -> object:
-    """Decode manifest bytes strictly, or raise :class:`_StrictManifestError`.
+def parse_strict_json(raw: bytes) -> object:
+    """Decode document bytes strictly, or raise :class:`StrictJsonError`.
 
     Bounded on purpose: a sub-1 MiB document can still nest past the JSON
     decoder's recursion limit, which is malformed input rather than a crash.
-    The caller turns every failure here into ``malformed_manifest`` so the CLI
-    keeps its ``--json`` / closed-reason-code contract and no traceback escapes.
+    Callers turn every failure here into ``malformed_manifest`` (or the
+    learning equivalent) so a CLI keeps its closed-reason-code contract and no
+    traceback escapes.
     """
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise _StrictManifestError(f"manifest is not UTF-8: {exc}") from exc
+        raise StrictJsonError(f"document is not UTF-8: {exc}") from exc
     try:
         return json.loads(text, object_pairs_hook=_unique_json_object)
-    except _StrictManifestError:
+    except StrictJsonError:
         raise
     except json.JSONDecodeError as exc:
-        raise _StrictManifestError(f"manifest is not JSON: {exc}") from exc
+        raise StrictJsonError(f"document is not JSON: {exc}") from exc
     except RecursionError as exc:
-        raise _StrictManifestError(
-            "manifest nests deeper than the JSON decoder limit"
+        raise StrictJsonError(
+            "document nests deeper than the JSON decoder limit"
         ) from exc
+
+
+#: Back-compat aliases: existing evidence code and tests keep private names.
+_StrictManifestError = StrictJsonError
+_parse_manifest_bytes = parse_strict_json
 
 
 def verify_evidence(

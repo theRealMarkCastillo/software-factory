@@ -332,6 +332,12 @@ def assert_safe_repo_root(repo_root: Path | str) -> None:
     resolution or Docker.
     """
     root = Path(repo_root).expanduser().resolve()
+    # Declaring a credential directory (or its child) as --repo must not
+    # reclassify its contents as ordinary source. Inspect names, not contents.
+    if any(_is_sensitive_component(part) for part in root.parts):
+        raise PolicyViolation(
+            f"repository root '{root}' is inside a sensitive credential or VCS path"
+        )
     if root == Path("/"):
         raise PolicyViolation(
             f"repository root '{root}' is the host root; refusing to treat the "

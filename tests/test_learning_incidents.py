@@ -547,7 +547,40 @@ def test_store_inside_evidence_root_or_evidence_inside_store_is_refused(work):
     assert reverse.reason == "store_invalid"
 
 
-def test_store_is_a_symlink_or_sensitive_root_is_refused(work):
+_WRITE_METHODS = ("mkdir", "touch", "write_text", "write_bytes")
+
+
+def _reject_writes(monkeypatch, roots) -> list:
+    """Fail if the code under test creates anything at ``roots``.
+
+    Returns the log of attempted writes. Absence is *not* inferred from
+    ``exists()``: on an unprivileged Linux runner stat'ing below ``/root``
+    raises ``PermissionError``, and even where it answers, a pre-existing
+    directory cannot be told apart from one this import created. Watching the
+    write methods asks the question the assertion actually means -- did this
+    call try to create the store? -- and answers it identically on every host.
+    """
+    attempts = []
+
+    def watcher(method_name):
+        original = getattr(Path, method_name)
+
+        def guarded(self, *args, **kwargs):
+            target = Path(self)
+            for root in roots:
+                if target == root or root in target.parents:
+                    attempts.append((method_name, str(target)))
+                    raise AssertionError(f"write attempt under {root}: {target}")
+            return original(self, *args, **kwargs)
+
+        return guarded
+
+    for method_name in _WRITE_METHODS:
+        monkeypatch.setattr(Path, method_name, watcher(method_name))
+    return attempts
+
+
+def test_store_is_a_symlink_or_sensitive_root_is_refused(work, monkeypatch):
     evidence = write_evidence(work.evidence, "probe.json", b'{"case": "duplicate"}')
     record_path = write_record(work.records, base_record(evidence))
 
@@ -556,14 +589,22 @@ def test_store_is_a_symlink_or_sensitive_root_is_refused(work):
     result = import_incident(record_path, evidence_root=work.evidence, store=link)
     assert result.reason == "store_invalid"
 
-    for sensitive in ("/etc", "/proc", "/sys", "/dev", "/root"):
+    sensitive_stores = [
+        Path(sensitive) / "factory-store"
+        for sensitive in ("/etc", "/proc", "/sys", "/dev", "/root")
+    ]
+    attempts = _reject_writes(monkeypatch, sensitive_stores)
+
+    for store in sensitive_stores:
         rejected = import_incident(
             record_path,
             evidence_root=work.evidence,
-            store=Path(sensitive) / "factory-store",
+            store=store,
         )
+        assert rejected.ok is False
         assert rejected.reason in {"store_invalid", "evidence_root_invalid"}
-        assert not (Path(sensitive) / "factory-store").exists()
+
+    assert attempts == []
 
 
 def _deny(monkeypatch, target: Path, method: str) -> None:
@@ -618,6 +659,52 @@ def test_ci_permission_denied_sensitive_store_is_refused_not_raised(work, monkey
 
     assert result.ok is False
     assert result.reason == "store_invalid"
+
+
+def test_refusal_of_inaccessible_sensitive_store_is_not_followed_by_a_probe(
+    work, monkeypatch
+):
+    """Regression: the guard around a refusal must not probe the protected root.
+
+    The runtime correctly refused ``/root/factory-store``; the *test* then asked
+    ``exists()`` and turned a green refusal into a Linux-only
+    ``PermissionError``. Here every metadata probe of that root keeps failing,
+    so re-introducing a post-refusal ``exists()``/``stat()`` anywhere in this
+    test fails loudly instead of passing on a host where the path is absent.
+    """
+    evidence = write_evidence(work.evidence, "probe.json", b'{"case": "duplicate"}')
+    record_path = write_record(work.records, base_record(evidence))
+    protected = Path("/root/factory-store")
+
+    probes = []
+
+    def denied(method_name):
+        original = getattr(Path, method_name)
+
+        def guarded(self, *args, **kwargs):
+            if Path(self) == protected:
+                probes.append(method_name)
+                raise PermissionError(13, "Permission denied", str(protected))
+            return original(self, *args, **kwargs)
+
+        return guarded
+
+    for method_name in ("exists", "is_symlink", "resolve", "stat"):
+        monkeypatch.setattr(Path, method_name, denied(method_name))
+    attempts = _reject_writes(monkeypatch, [protected])
+
+    result = import_incident(record_path, evidence_root=work.evidence, store=protected)
+
+    probes_during_import = list(probes)
+
+    assert result.ok is False
+    assert result.action == "rejected"
+    assert result.reason == "store_invalid"
+    assert protected.name in (result.detail or "")
+    assert attempts == []
+    # Nothing after the refusal may touch the protected root; any later probe
+    # raises ``PermissionError`` above instead of answering.
+    assert probes == probes_during_import
 
 
 def test_failed_store_admission_leaves_no_record_or_proposal(work, monkeypatch):

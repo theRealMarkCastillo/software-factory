@@ -225,14 +225,6 @@ def _pip_audit_binary() -> str | None:
 
 def _run_pip_audit_env(repo: Path, venv: Path) -> AuditResult:
     """Audit the packages actually installed in a repo-local venv."""
-    pip_bin = venv / "bin" / "pip"
-    if not pip_bin.is_file():
-        return AuditResult(
-            "unavailable",
-            "python",
-            detail=f"venv has no bin/pip at {venv}",
-            tool="pip-audit",
-        )
     pip_audit = _pip_audit_binary()
     if not pip_audit:
         return AuditResult(
@@ -244,11 +236,11 @@ def _run_pip_audit_env(repo: Path, venv: Path) -> AuditResult:
     # Point pip-audit at the venv's site-packages via --path and -l
     # (audit the local environment at that path). --no-deps is invalid
     # without -r, so we use -l here; it audits exactly the installed set.
-    candidates = sorted((venv / "lib").glob("python*/site-packages"))
-    # Keep a plain lib fallback for minimal test fixtures and nonstandard
-    # virtual environments; real CPython venvs use site-packages above.
-    if not candidates and (venv / "lib").is_dir():
-        candidates = [venv / "lib"]
+    # uv environments need not contain pip. The auditor reads installed
+    # distributions directly, so require site-packages rather than bin/pip.
+    candidates = sorted(
+        path for path in (venv / "lib").glob("python*/site-packages") if path.is_dir()
+    )
     if not candidates:
         return AuditResult(
             "unavailable",

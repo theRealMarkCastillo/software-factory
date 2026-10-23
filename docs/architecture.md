@@ -21,6 +21,14 @@ untracked Python files. Audit availability and successful execution are separate
 facts. The data-model gate validates declarations and referenced tests; it does not
 prove their behavior independently of the test run.
 
+## Python environments
+
+uv manages the development environment and committed dependency lockfile. The
+engine has no uv runtime dependency and can be installed with pip. Subject
+repositories keep their own environment tooling. Audits inspect target
+site-packages directly, including environments created without pip. The factory's
+development environment includes pip transitively through its audit tooling.
+
 ## Hermes adapter
 
 Hermes owns task scheduling and worker lifecycle. Skills tell the orchestrator and

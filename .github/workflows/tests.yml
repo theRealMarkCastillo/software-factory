@@ -10,10 +10,18 @@ jobs:
         python: ['3.11', '3.12', '3.13']
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
+          version: '0.11.6'
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -e '.[dev]'
-      - run: python -m pytest -q
-      - run: python -m ruff check .
-      - run: python -m ruff format --check .
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run --locked python -m pytest -q
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - name: Audit a pip-free uv environment
+        run: |
+          uv venv "$RUNNER_TEMP/factory-audit-target" --python "${{ matrix.python }}"
+          "$RUNNER_TEMP/factory-audit-target/bin/python" -c 'import importlib.util; assert importlib.util.find_spec("pip") is None'
+          uv run --locked factory-audit --repo examples/minimal --venv "$RUNNER_TEMP/factory-audit-target" > "$RUNNER_TEMP/audit-result.json"
+          uv run --locked python -c 'import json, sys; assert json.load(open(sys.argv[1]))["result"]["status"] == "pass"' "$RUNNER_TEMP/audit-result.json"

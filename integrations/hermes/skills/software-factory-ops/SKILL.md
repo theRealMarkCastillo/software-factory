@@ -9,8 +9,9 @@ metadata:
 
 # Software Factory Ops
 
-Use the installed factory CLI (`python -m factory.runner --help`) from the
-factory environment. Supply the task ID, subject repository, Compose files,
+From the factory checkout, use `uv run --locked factory-run --help`. An
+installation managed without uv can use `python -m factory.runner --help`
+from its factory environment. Supply the task ID, subject repository, Compose files,
 test service, and a writable artifact root.
 
 The runner validates every input, runs host gates, snapshots containers, executes

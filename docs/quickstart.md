@@ -1,14 +1,14 @@
 # Standalone quickstart
 
-Run these commands from the factory checkout after installing `.[dev,audit]` as
+Run these commands from the factory checkout after running `uv sync --locked` as
 shown in the README. The engine can be invoked by a shell, Hermes, or another agent.
 
 ## Verify installation without Docker
 
 ```sh
-.venv/bin/python -m factory.runner --help
-.venv/bin/python -m factory.coverage --help
-.venv/bin/python -m pytest -q
+uv run --locked factory-run --help
+uv run --locked factory-coverage --help
+uv run --locked python -m pytest -q
 ```
 
 ## Run the minimal Compose smoke test
@@ -19,7 +19,7 @@ source delta or dependency manifest, so those gates record inapplicability.
 It tests the runner lifecycle, not a business application.
 
 ```sh
-.venv/bin/python -m factory.runner \
+uv run --locked factory-run \
   --card smoke \
   --repo examples/minimal \
   --compose compose.yml \
@@ -38,9 +38,12 @@ Provide a Git working tree, a Compose test service, and an `.env.example` descri
 the environment. Use internal service names instead of published host ports.
 Python projects need pytest and pytest-cov plus project dependencies in the
 interpreter used to launch the runner (or `FACTORY_COVERAGE_INTERPRETER`).
+The subject project can use any environment manager. Python environment audits
+read installed distributions from `lib/python*/site-packages`; the target
+environment does not need pip. The factory environment provides `pip-audit`.
 
 ```sh
-.venv/bin/python -m factory.runner \
+uv run --locked factory-run \
   --card task-123 \
   --repo /path/to/project \
   --compose compose.yml \

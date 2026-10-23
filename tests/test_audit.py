@@ -34,12 +34,12 @@ def make_pip_env_payload(vulns):
 
 
 def _tmp_venv(tmp_path, with_pip=True):
-    """A minimal fake venv: bin/pip exists, lib/ holds nothing (not scanned)."""
+    """A minimal site-packages layout, optionally with a pip executable."""
     venv = tmp_path / ".venv"
     (venv / "bin").mkdir(parents=True)
     if with_pip:
         (venv / "bin" / "pip").write_text("x")  # existence marker
-    (venv / "lib").mkdir(parents=True)
+    (venv / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
     return venv
 
 
@@ -91,12 +91,44 @@ def test_python_env_scan_reports_pass_when_clean(tmp_path, monkeypatch):
     assert r.status == "pass"
 
 
-def test_missing_venv_pip_reports_unavailable_not_crash(tmp_path):
-    venv = _tmp_venv(tmp_path, with_pip=False)
+@pytest.mark.parametrize("vulnerable", [False, True])
+def test_pip_free_environment_is_audited(tmp_path, monkeypatch, vulnerable):
+    import venv as stdlib_venv
+
+    venv = tmp_path / "pip-free"
+    stdlib_venv.EnvBuilder(with_pip=False).create(venv)
+    site_packages = next((venv / "lib").glob("python*/site-packages"))
+    assert not (venv / "bin" / "pip").exists()
     repo = _repo_with(tmp_path, {})
+    monkeypatch.setenv("FACTORY_PIP_AUDIT", "/fake/pip-audit")
+    calls = []
+
+    def scan(cmd, **kwargs):
+        calls.append(cmd)
+        assert cmd[cmd.index("--path") + 1] == str(site_packages)
+        return FakeProc(
+            int(vulnerable), stdout=json.dumps(make_pip_env_payload(vulnerable))
+        )
+
+    monkeypatch.setattr(audit.subprocess, "run", scan)
+    r = audit.run_dependency_audit(str(repo), "python", str(venv))
+    assert r.status == ("fail" if vulnerable else "pass")
+    assert len(calls) == 1
+
+
+def test_environment_without_site_packages_reports_unavailable(tmp_path, monkeypatch):
+    venv = tmp_path / "broken-venv"
+    (venv / "lib").mkdir(parents=True)
+    repo = _repo_with(tmp_path, {})
+    monkeypatch.setenv("FACTORY_PIP_AUDIT", "/fake/pip-audit")
+
+    def unexpected_scan(*args, **kwargs):
+        pytest.fail("must not audit an empty lib directory as an environment")
+
+    monkeypatch.setattr(audit.subprocess, "run", unexpected_scan)
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
     assert r.status == "unavailable"
-    assert "no bin/pip" in r.detail
+    assert "no site-packages" in r.detail
 
 
 def test_missing_pip_audit_binary_reports_unavailable(tmp_path, monkeypatch):

@@ -925,3 +925,204 @@ def test_cli_legacy_manifest_exits_one_with_legacy_reason(tmp_path, capsys):
     assert rc == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["reason"] == "legacy_schema_unsupported"
+
+
+# ---------------------------------------------------------------------------
+# strict manifest parsing: bounded nesting and unambiguous keys
+# ---------------------------------------------------------------------------
+#
+# Both classes below are *semantic* rejections, not digest failures: each
+# fixture rewrites the manifest bytes and refreshes the sidecar to match, so a
+# rejection can only come from the parser itself.
+
+DEEP_MANIFESTS = {
+    "deep-array": b"[" * 200_000 + b"]" * 200_000,
+    "deep-object": b'{"a":' * 50_000 + b"0" + b"}" * 50_000,
+}
+
+BROKEN_NESTED_MANIFESTS = {
+    "truncated-nested-object": (
+        b'{"schema": {"name": "factory-evidence", "version": 2}, "gates": {"audit": '
+    ),
+    "invalid-token-inside-array": b'{"a": {"b": {"c": [1, 2, ]}}}',
+    "unclosed-string-at-depth": b'{"runtime": {"safety": {"postflight": "clean}}}',
+}
+
+
+def _raw_manifest(artifacts: Path, payload: bytes) -> None:
+    """Write raw manifest bytes plus the matching sidecar digest."""
+    (artifacts / MANIFEST_FILENAME).write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    (artifacts / SIDECAR_FILENAME).write_text(f"{digest}  {MANIFEST_FILENAME}\n")
+
+
+def _inject_duplicate(
+    payload: str, anchor: str, *, value: str | None = None, before: bool = False
+) -> str:
+    """Insert a second member repeating the key of the line containing ``anchor``.
+
+    The insertion happens inside the *same* JSON object, which is what makes the
+    document ambiguous. ``before`` puts the conflicting member first so a
+    last-wins reader would keep the original value (the dangerous order).
+    """
+    lines = payload.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if anchor in line and stripped.startswith('"') and stripped.endswith(","):
+            indent = line[: len(line) - len(line.lstrip())]
+            key = stripped.split(":", 1)[0]
+            duplicate = line if value is None else f"{indent}{key}: {value},"
+            lines.insert(index if before else index + 1, duplicate)
+            return "\n".join(lines) + "\n"
+    raise AssertionError(f"no member line matched {anchor!r}")
+
+
+DUPLICATE_MEMBERS = {
+    # The exact F2 shape: a last-wins reader keeps acceptance and certifies.
+    "top-level-conflicting-mode": (
+        lambda payload: _inject_duplicate(
+            payload, '"mode": "acceptance"', value='"diagnostic"', before=True
+        ),
+        '"diagnostic" then "acceptance"',
+    ),
+    # Identical values are just as ambiguous and must not be waved through.
+    "top-level-identical-mode": (
+        lambda payload: _inject_duplicate(payload, '"mode": "acceptance"'),
+        '"acceptance" twice',
+    ),
+    # Depth 2: a member of the schema object.
+    "nested-schema-name": (
+        lambda payload: _inject_duplicate(payload, '"name": "factory-evidence"'),
+        "schema.name twice",
+    ),
+    # Depth 3 inside an array element: an object nested in ``artifacts``.
+    "object-inside-array": (
+        lambda payload: _inject_duplicate(payload, '"name": "compose.log"'),
+        "artifacts[].name twice",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(DEEP_MANIFESTS))
+def test_deeply_nested_manifest_is_rejected_as_malformed(tmp_path, case):
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    payload = DEEP_MANIFESTS[case]
+    assert len(payload) < 1024 * 1024  # still inside the size bound
+    _raw_manifest(artifacts, payload)
+
+    result = verify_evidence(artifacts, repo, candidate, base)
+
+    assert result.ok is False
+    assert result.reason == "malformed_manifest"
+
+
+@pytest.mark.parametrize("case", sorted(DEEP_MANIFESTS))
+def test_deeply_nested_manifest_cli_is_structured_and_traceless(tmp_path, capsys, case):
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    _raw_manifest(artifacts, DEEP_MANIFESTS[case])
+
+    rc = _cli(
+        "--artifacts-dir",
+        str(artifacts),
+        "--repo",
+        str(repo),
+        "--candidate",
+        candidate,
+        "--base",
+        base,
+        "--json",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["reason"] == "malformed_manifest"
+    assert "Traceback" not in captured.err
+    assert captured.err == ""
+
+
+@pytest.mark.parametrize("case", sorted(BROKEN_NESTED_MANIFESTS))
+def test_malformed_nested_object_is_rejected_as_malformed(tmp_path, capsys, case):
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    _raw_manifest(artifacts, BROKEN_NESTED_MANIFESTS[case])
+
+    rc = _cli(
+        "--artifacts-dir",
+        str(artifacts),
+        "--repo",
+        str(repo),
+        "--candidate",
+        candidate,
+        "--base",
+        base,
+        "--json",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert json.loads(captured.out)["reason"] == "malformed_manifest"
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("case", sorted(DUPLICATE_MEMBERS))
+def test_duplicate_object_member_is_rejected_at_any_depth(tmp_path, case):
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = _evidence(tmp_path, repo, base, candidate)
+    inject, description = DUPLICATE_MEMBERS[case]
+    payload = inject((artifacts / MANIFEST_FILENAME).read_text())
+    _raw_manifest(artifacts, payload.encode())
+
+    result = verify_evidence(artifacts, repo, candidate, base)
+
+    assert result.ok is False, description
+    assert result.reason == "malformed_manifest", description
+
+
+@pytest.mark.parametrize("case", sorted(DUPLICATE_MEMBERS))
+def test_duplicate_object_member_cli_exits_one_with_reason(tmp_path, capsys, case):
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = _evidence(tmp_path, repo, base, candidate)
+    inject, _description = DUPLICATE_MEMBERS[case]
+    payload = inject((artifacts / MANIFEST_FILENAME).read_text())
+    _raw_manifest(artifacts, payload.encode())
+
+    rc = _cli(
+        "--artifacts-dir",
+        str(artifacts),
+        "--repo",
+        str(repo),
+        "--candidate",
+        candidate,
+        "--base",
+        base,
+        "--json",
+    )
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert json.loads(captured.out)["reason"] == "malformed_manifest"
+    assert "CERTIFIED" not in captured.out
+    assert "Traceback" not in captured.err
+
+
+def test_repeated_key_names_in_different_objects_still_certify(tmp_path):
+    """Only a repeat inside one object is ambiguous; siblings are not."""
+    repo, base, candidate = _repo(tmp_path)
+    artifacts = _evidence(tmp_path, repo, base, candidate)
+
+    def mutate(manifest):
+        manifest["runtime"]["safety"]["note"] = "same key, other object"
+        manifest["execution"]["note"] = "same key, other object"
+
+    _rewrite(artifacts, mutate)
+    result = verify_evidence(artifacts, repo, candidate, base)
+
+    assert result.ok is True, (result.reason, result.detail)
+    assert result.reason == "ok"

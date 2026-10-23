@@ -1174,6 +1174,51 @@ def _substantiate_claim(
     return f"no substantiation rule for {claim.gate}:{claim.key}"
 
 
+class _StrictManifestError(ValueError):
+    """Manifest bytes are not one unambiguous JSON object (internal signal)."""
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
+    """``json`` object hook: refuse a repeated key inside ONE object.
+
+    ``json`` keeps the *last* value of a repeated member, so a manifest reading
+    ``{"mode": "diagnostic", "mode": "acceptance"}`` certifies as acceptance
+    while another conforming reader may keep ``diagnostic``. Refusing every
+    repeat at every depth -- same or conflicting value, either order -- removes
+    the ambiguity instead of silently choosing a winner.
+    """
+    members: dict = {}
+    for key, value in pairs:
+        if key in members:
+            raise _StrictManifestError(f"manifest repeats the object key {key[:80]!r}")
+        members[key] = value
+    return members
+
+
+def _parse_manifest_bytes(raw: bytes) -> object:
+    """Decode manifest bytes strictly, or raise :class:`_StrictManifestError`.
+
+    Bounded on purpose: a sub-1 MiB document can still nest past the JSON
+    decoder's recursion limit, which is malformed input rather than a crash.
+    The caller turns every failure here into ``malformed_manifest`` so the CLI
+    keeps its ``--json`` / closed-reason-code contract and no traceback escapes.
+    """
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise _StrictManifestError(f"manifest is not UTF-8: {exc}") from exc
+    try:
+        return json.loads(text, object_pairs_hook=_unique_json_object)
+    except _StrictManifestError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise _StrictManifestError(f"manifest is not JSON: {exc}") from exc
+    except RecursionError as exc:
+        raise _StrictManifestError(
+            "manifest nests deeper than the JSON decoder limit"
+        ) from exc
+
+
 def verify_evidence(
     artifacts_dir: str | Path,
     repo_path: str | Path,
@@ -1224,9 +1269,9 @@ def verify_evidence(
         )
     raw = manifest_path.read_bytes()
     try:
-        manifest = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return reject("manifest", "malformed_manifest", f"manifest is not JSON: {exc}")
+        manifest = _parse_manifest_bytes(raw)
+    except _StrictManifestError as exc:
+        return reject("manifest", "malformed_manifest", str(exc))
     if not isinstance(manifest, dict):
         return reject(
             "manifest", "malformed_manifest", "manifest must be a JSON object"

@@ -16,6 +16,23 @@ not implement the complete Compose merge specification; it validates each input
 before merging mappings and validates the merged model again. A file with an
 unsafe declaration is rejected even if a later override would remove it.
 
+## Compose bind-mount policy
+
+Absolute bind sources may not point at sensitive host roots (`/etc`, `/var`,
+`/home`, `/Users`, `/root`, `/proc`, `/sys`, `/dev`), checked both as written and
+after symlink resolution. This includes the operator's own home directory, the
+Docker socket, and system paths.
+
+Relative sources are resolved against the subject repository. They are allowed
+inside that repository even when the checkout itself lives under `/Users` or
+`/home`, so a normal repository-local data or fixture mount keeps working. They
+are rejected when resolution leaves the repository (traversal or symlink escape)
+or when any path component is a credential or metadata subtree: `.git`, `.ssh`,
+`.aws`, `.gnupg`, `.docker`, `.kube`, `.netrc`, `.npmrc`, `.pypirc`, `.env`, or
+`secrets`. The absolute spelling of a repository path remains rejected; use the
+relative form. Named volumes skip the host-path check because Compose resolves
+them internally.
+
 Coverage compares the selected Git base with the actual working tree and includes
 untracked Python files. Audit availability and successful execution are separate
 facts. The data-model gate validates declarations and referenced tests; it does not
@@ -42,7 +59,9 @@ The first release does not promise cross-agent scheduling compatibility.
 
 - Artifact storage defaults to `~/.hermes/kanban/factory-artifacts`; override with
   `--artifacts-root`.
-- Audit binary discovery has a Hermes-venv fallback after an override and PATH.
+- Audit binary discovery prefers the environment of the interpreter running the
+  engine, then falls back to PATH and a historical Hermes venv. An explicit
+  `FACTORY_PIP_AUDIT` override always wins.
 - `HERMES_KANBAN_TASK` is optional provenance in the manifest.
 - The runner uses `main` as the coverage base.
 - Protected projects and reserved ports can be extended through an absolute

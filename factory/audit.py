@@ -6,8 +6,8 @@ standard factory gate BEFORE a compose run or alongside a bare-venv test
 run. Uses pip-audit for Python and `npm audit` for JS/TS.
 
 Design notes:
-- Runs on the HOST using pip-audit (already in the hermes venv) and npm
-  (installed), inspecting the checked-out repo's manifests. This keeps
+- Runs on the HOST using pip-audit (installed with the engine environment) and
+  npm (installed), inspecting the checked-out repo's manifests. This keeps
   audit tooling out of the ephemeral test containers and lets the gate run
   even on cards that need no Compose at all.
 - Its failure mode is conservative: a pipeline NEVER advances past a
@@ -28,6 +28,8 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import sysconfig
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -203,17 +205,42 @@ def run_dependency_audit(
     )
 
 
+def _engine_pip_audit_candidates() -> list[str]:
+    """pip-audit locations inside the interpreter running this engine.
+
+    The gate must audit with the auditor installed alongside the engine
+    interpreter. Ambient PATH and a historical Hermes installation are only
+    fallbacks: on a clean deployment they may not exist, and on a shared host
+    they may belong to a different installation.
+    """
+    candidates: list[str] = []
+    executable = getattr(sys, "executable", "") or ""
+    if executable:
+        # Do not resolve(): a venv's python is usually a symlink to the base
+        # interpreter, while the auditor lives beside the venv entry point.
+        candidates.append(str(Path(executable).parent / "pip-audit"))
+    try:
+        scripts = sysconfig.get_path("scripts")
+    except (KeyError, TypeError):  # pragma: no cover - unusual interpreter scheme
+        scripts = None
+    if scripts:
+        candidates.append(str(Path(scripts) / "pip-audit"))
+    return candidates
+
+
 def _pip_audit_binary() -> str | None:
     """Resolve the pip-audit binary without hardcoding a user-specific path.
 
-    Precedence: explicit ``FACTORY_PIP_AUDIT`` env override, then PATH, then
-    the Hermes venv's known location. Returns None if nothing usable is found
-    (callers report ``unavailable`` rather than crashing).
+    Precedence: explicit ``FACTORY_PIP_AUDIT`` override, then the current
+    engine interpreter's environment, then PATH, then the historical Hermes
+    venv. Returns None if nothing usable is found (callers report
+    ``unavailable`` rather than crashing).
     """
     override = os.environ.get("FACTORY_PIP_AUDIT")
     if override:
         return override
     candidates = [
+        *_engine_pip_audit_candidates(),
         shutil.which("pip-audit"),
         str(Path.home() / ".hermes" / "hermes-agent" / "venv" / "bin" / "pip-audit"),
     ]
@@ -230,7 +257,10 @@ def _run_pip_audit_env(repo: Path, venv: Path) -> AuditResult:
         return AuditResult(
             "unavailable",
             "python",
-            detail="pip-audit binary not found on PATH or in the Hermes venv",
+            detail=(
+                "pip-audit binary not found in the engine environment, on PATH, "
+                "or in the Hermes venv"
+            ),
             tool="pip-audit",
         )
     # Point pip-audit at the venv's site-packages via --path and -l
@@ -312,7 +342,10 @@ def _run_pip_audit(repo: Path, manifest: Path) -> AuditResult:
         return AuditResult(
             "unavailable",
             "python",
-            detail="pip-audit binary not found on PATH or in the Hermes venv",
+            detail=(
+                "pip-audit binary not found in the engine environment, on PATH, "
+                "or in the Hermes venv"
+            ),
             tool="pip-audit",
         )
     cmd = [pip_audit, "--format", "json", "--no-deps"]

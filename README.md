@@ -81,9 +81,9 @@ skills are installed separately from this checkout.
 | Board and profiles | Scheduling, worker permissions, lifecycle transitions | Hermes installation |
 
 The engine retains installation-specific defaults: the artifact directory is
-under `~/.hermes`, the runner coverage base is `main`, and policy constants include
-example protected projects and reserved ports. Review these before
-adopting it on another host. See [architecture and limitations](docs/architecture.md).
+under `~/.hermes`, the runner coverage base is `main`, and policy defaults include
+example protected projects and reserved ports. Add your host protection through
+an explicit `FACTORY_HOST_CONFIG` file; see [deployment guidance](docs/deployment.md). See [architecture and limitations](docs/architecture.md).
 
 ## Safety and evidence
 

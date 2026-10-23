@@ -45,8 +45,9 @@ The first release does not promise cross-agent scheduling compatibility.
 - Audit binary discovery has a Hermes-venv fallback after an override and PATH.
 - `HERMES_KANBAN_TASK` is optional provenance in the manifest.
 - The runner uses `main` as the coverage base.
-- Example protected project names, reserved ports, and sensitive roots are policy
-  constants. Configure protected project names for your host.
+- Protected projects and reserved ports can be extended through an absolute
+  `FACTORY_HOST_CONFIG` JSON path. Invalid configuration fails closed. Sensitive
+  roots and the other built-in safety restrictions cannot be disabled by it.
 - Unix host tools are used by port helpers. Windows support has not been established.
 - `.env.example` is required for assembled evidence.
 - `factory.contract.yml` is not automatically loaded by the runner. The standalone

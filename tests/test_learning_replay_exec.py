@@ -80,7 +80,9 @@ def make_repo(
     (repo / "factory" / "thing.py").write_text(
         f"def value():\n    return {base_value}\n"
     )
-    git(repo, "init", "-q")
+    # Pin the initial branch: GitHub runners may default to ``master`` while the
+    # safety tests address ``refs/heads/main`` explicitly.
+    git(repo, "init", "-q", "-b", "main")
     git(repo, "add", ".")
     git(repo, "commit", "-q", "-m", "baseline")
     baseline = git(repo, "rev-parse", "HEAD")
@@ -103,6 +105,22 @@ def make_repo(
     git(repo, "commit", "-q", "--allow-empty", "-m", "candidate")
     candidate = git(repo, "rev-parse", "HEAD")
     return {"repo": repo, "baseline": baseline, "candidate": candidate}
+
+
+def test_make_repo_pins_main_regardless_of_ambient_init_default(tmp_path, monkeypatch):
+    """The disposable repo must not inherit the runner's ``init.defaultBranch``."""
+    monkeypatch.setattr(
+        sys.modules[__name__], "GIT", [*GIT, "-c", "init.defaultBranch=trunk"]
+    )
+
+    fixture = make_repo(tmp_path)
+
+    assert git(fixture["repo"], "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    assert git(fixture["repo"], "rev-parse", "refs/heads/main") == fixture["candidate"]
+    branches = git(
+        fixture["repo"], "for-each-ref", "--format=%(refname:short)", "refs/heads"
+    )
+    assert branches.splitlines() == ["main"]
 
 
 def make_suite(base: Path, *, write_suite, controls=None) -> tuple[Path, str]:

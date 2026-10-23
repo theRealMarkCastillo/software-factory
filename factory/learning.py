@@ -491,17 +491,37 @@ def validate_record(record: object, evidence_root: Path) -> dict:
 def _admit_store(
     store: Path | str, evidence_root: Path | None = None, *, create: bool = True
 ) -> Path:
+    """Resolve and admit a store root, refusing anything unsafe or unreadable.
+
+    Filesystem probes are fail-closed: an inaccessible path (for example
+    ``/root/factory-store`` for an unprivileged CI runner) is refused with a
+    structured ``store_invalid`` instead of leaking ``PermissionError``. The
+    authoritative location checks below run on the resolved path, so refusing an
+    unreadable path never weakens the sensitive-root protections.
+    """
     raw = Path(store).expanduser()
-    if raw.is_symlink():
-        raise _Rejected("store_invalid", f"store is a symlink: {raw}")
-    root = raw.resolve()
+    try:
+        if raw.is_symlink():
+            raise _Rejected("store_invalid", f"store is a symlink: {raw}")
+        root = raw.resolve()
+    except OSError as exc:
+        raise _Rejected(
+            "store_invalid",
+            f"store path is not accessible: {raw} ({exc.strerror or exc})",
+        ) from exc
     _assert_store_location(root)
     if evidence_root is not None:
         _assert_disjoint(evidence_root, root)
-    if root.exists() and not root.is_dir():
-        raise _Rejected("store_invalid", f"store is not a directory: {root}")
-    if create:
-        root.mkdir(parents=True, exist_ok=True)
+    try:
+        if root.exists() and not root.is_dir():
+            raise _Rejected("store_invalid", f"store is not a directory: {root}")
+        if create:
+            root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise _Rejected(
+            "store_invalid",
+            f"store path is not accessible: {root} ({exc.strerror or exc})",
+        ) from exc
     return root
 
 

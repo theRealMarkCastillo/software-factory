@@ -331,6 +331,48 @@ def run_cli(argv, capsys):
     return code, captured.out, captured.err
 
 
+def test_cli_inaccessible_store_is_rejected_without_traceback(
+    work, capsys, monkeypatch
+):
+    """A store probe that raises ``PermissionError`` must exit 1, never crash."""
+    blob = b'{"case": "duplicate_json_keys_last_wins"}'
+    record = record_for(write_evidence(work.evidence, "probe.json", blob))
+    path = write_record(work.records, record)
+    blocked = work.store.resolve()
+
+    original = Path.is_symlink
+
+    def guarded(self):
+        if Path(self) == blocked:
+            raise PermissionError(13, "Permission denied", str(blocked))
+        return original(self)
+
+    monkeypatch.setattr(Path, "is_symlink", guarded)
+
+    code, out, err = run_cli(
+        [
+            "import",
+            "--record",
+            str(path),
+            "--evidence-root",
+            str(work.evidence),
+            "--store",
+            str(blocked),
+            "--json",
+        ],
+        capsys,
+    )
+
+    payload = json.loads(out)
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["reason"] == "store_invalid"
+    assert "Traceback" not in err
+    assert "rejected" in err
+    assert not work.store.exists()
+    assert not (work.store / "proposals").exists()
+
+
 def test_cli_import_and_duplicate_exit_zero(work, capsys):
     blob = b'{"case": "duplicate_json_keys_last_wins"}'
     record = record_for(write_evidence(work.evidence, "probe.json", blob))

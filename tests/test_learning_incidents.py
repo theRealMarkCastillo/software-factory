@@ -566,6 +566,72 @@ def test_store_is_a_symlink_or_sensitive_root_is_refused(work):
         assert not (Path(sensitive) / "factory-store").exists()
 
 
+def _deny(monkeypatch, target: Path, method: str) -> None:
+    """Make one filesystem method raise ``PermissionError`` for ``target`` only.
+
+    ``/root/factory-store`` cannot be stat'ed by an unprivileged Linux CI runner,
+    so the real refusal path must survive ``PermissionError``/``OSError`` from
+    any filesystem probe and still answer with a structured ``store_invalid``.
+    Mocking keeps the case deterministic on hosts (like macOS) where the path is
+    simply absent.
+    """
+
+    original = getattr(Path, method)
+
+    def guarded(self, *args, **kwargs):
+        if Path(self) == target:
+            raise PermissionError(13, "Permission denied", str(target))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, method, guarded)
+
+
+@pytest.mark.parametrize("method", ["is_symlink", "resolve", "exists", "mkdir"])
+def test_inaccessible_store_path_is_refused_with_a_structured_result(
+    work, monkeypatch, method
+):
+    evidence = write_evidence(work.evidence, "probe.json", b'{"case": "duplicate"}')
+    record_path = write_record(work.records, base_record(evidence))
+    blocked = (work.tmp / "unreadable-store").resolve()
+
+    _deny(monkeypatch, blocked, method)
+
+    result = import_incident(record_path, evidence_root=work.evidence, store=blocked)
+
+    assert result.ok is False
+    assert result.action == "rejected"
+    assert result.reason == "store_invalid"
+    assert blocked.name in (result.detail or "")
+    assert not (work.tmp / "unreadable-store" / "incidents").exists()
+    assert not (work.tmp / "unreadable-store" / "proposals").exists()
+
+
+def test_ci_permission_denied_sensitive_store_is_refused_not_raised(work, monkeypatch):
+    """The exact Linux CI failure: stat below /root raises ``PermissionError``."""
+    evidence = write_evidence(work.evidence, "probe.json", b'{"case": "duplicate"}')
+    record_path = write_record(work.records, base_record(evidence))
+    ci_store = Path("/root/factory-store")
+
+    _deny(monkeypatch, ci_store, "is_symlink")
+
+    result = import_incident(record_path, evidence_root=work.evidence, store=ci_store)
+
+    assert result.ok is False
+    assert result.reason == "store_invalid"
+
+
+def test_failed_store_admission_leaves_no_record_or_proposal(work, monkeypatch):
+    evidence = write_evidence(work.evidence, "probe.json", b'{"case": "duplicate"}')
+    record_path = write_record(work.records, base_record(evidence))
+    blocked = work.tmp / "unreadable-store"
+
+    _deny(monkeypatch, blocked, "is_symlink")
+
+    import_incident(record_path, evidence_root=work.evidence, store=blocked)
+
+    assert sorted(path.name for path in work.tmp.iterdir()) == ["evidence", "records"]
+
+
 def test_ordinary_owned_home_subdirectory_is_a_valid_store(work):
     base = Path.home() / ".hermes" / "cache" / "scratch" / f"learning-{work.tmp.name}"
     base.mkdir(parents=True)

@@ -1124,3 +1124,57 @@ def test_fsmonitor_program_is_not_executed(tmp_path, capsys):
     assert after["config"] == before["config"]
     assert after["index"] == before["index"]
     assert after["refs"]["refs/heads/release"] == candidate
+
+
+# ---------------------------------------------------------------------------
+# strict manifest parsing: promotion consumes a malformed_manifest rejection
+# ---------------------------------------------------------------------------
+#
+# The sidecar is refreshed with the mutated bytes, so the refusal is semantic:
+# it comes from the parser, not from a stale digest.
+
+DEEP_MANIFEST_PAYLOAD = b"[" * 200_000 + b"]" * 200_000
+
+
+def _raw_manifest(artifacts: Path, payload: bytes) -> None:
+    (artifacts / MANIFEST_FILENAME).write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    (artifacts / SIDECAR_FILENAME).write_text(f"{digest}  {MANIFEST_FILENAME}\n")
+
+
+def _duplicate_mode_payload(artifacts: Path) -> bytes:
+    """Insert ``"mode": "diagnostic"`` before ``"mode": "acceptance"``.
+
+    A last-wins reader would keep ``acceptance`` and certify the manifest; the
+    strict parser must refuse the ambiguous document outright.
+    """
+    lines = (artifacts / MANIFEST_FILENAME).read_text().splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() == '"mode": "acceptance",':
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.insert(index, f'{indent}"mode": "diagnostic",')
+            return ("\n".join(lines) + "\n").encode()
+    raise AssertionError("no top-level mode member found")
+
+
+@pytest.mark.parametrize("case", ["duplicate-mode", "deep-array"])
+def test_malformed_manifest_is_rejected_without_any_mutation(tmp_path, capsys, case):
+    repo, base, candidate = _repo(tmp_path)
+    _branch(repo, "release", base)
+    artifacts = _evidence(tmp_path, repo, base, candidate)
+    payload = (
+        _duplicate_mode_payload(artifacts)
+        if case == "duplicate-mode"
+        else DEEP_MANIFEST_PAYLOAD
+    )
+    _raw_manifest(artifacts, payload)
+    before = _snapshot(repo)
+
+    assert _promote(repo, artifacts, base, candidate) == 1
+
+    result = _json_out(capsys)
+    assert result["reason"] == "evidence_rejected:malformed_manifest"
+    assert result["verification"]["reason"] == "malformed_manifest"
+    assert result["promoted"] is False
+    assert result["after"] == base
+    assert _snapshot(repo) == before

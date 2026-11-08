@@ -28,9 +28,9 @@ acceptance.
 ```sh
 uv sync --extra orchestration --locked                # resolved 72 packages
 uv run --extra orchestration python -m pytest -q tests/test_orchestration_*.py
-# 56 passed in 15.61s                      -> evidence/pytest-orchestration.txt
+# 57 passed in 17.34s                      -> evidence/pytest-orchestration.txt
 uv run --extra orchestration python -m pytest -q
-# 738 passed, 2 skipped (live-host checks) -> evidence/pytest-full.txt
+# 739 passed, 2 skipped (live-host checks) -> evidence/pytest-full.txt
 uv run --extra orchestration python -m ruff check .
 # All checks passed!                      -> evidence/ruff-check.txt
 uv run --extra orchestration python -m ruff format --check .
@@ -44,7 +44,7 @@ git diff --check                          # exit 0, no output
 | --- | --- | --- |
 | T1 one effect owner | PASS | two real child processes, durable request count + single `admitted` event |
 | T2 inspect/export provenance | PASS | real LangGraph SQLite checkpoint, attempt, candidate/base, engine release, next action |
-| T3 crash windows | PASS | four process-death windows; durable effect directory inspected after death |
+| T3 crash windows | PASS | five process-death windows (worker before/after submit, after receipt, after checkpoint; gate after acceptance receipt); durable effect directories inspected |
 | T4 stale/cancelled attempts | PASS | superseded attempt refused; cancellation idempotent; resume blocked |
 | T5 evidence negatives | PASS | real `factory.evidence.verify_evidence` reason codes; duplicate-key guard |
 | T6 independent review | PASS | self-approval refused; inconclusive holds; candidate-bound review refused |

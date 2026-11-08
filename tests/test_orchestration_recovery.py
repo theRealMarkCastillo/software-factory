@@ -162,6 +162,28 @@ def test_crash_after_checkpoint_does_not_repeat_confirmed_work(tmp_path):
     assert request_count(seeded["worker"]) == 1
 
 
+def test_crash_after_acceptance_receipt_does_not_rerun_the_gate(tmp_path):
+    seeded = seed(tmp_path)
+    crashed = _run(
+        _config(
+            seeded,
+            tmp_path,
+            gate_crash_phase="after_receipt",
+        )
+    )
+    assert crashed.returncode == 97
+    receipts = list((seeded["worker"].root / "gate-receipts").glob("*.json"))
+    assert len(receipts) == 1
+
+    restart = _run(_config(seeded, tmp_path))
+    assert restart.returncode == 0, restart.stderr
+    assert (
+        _child_result(tmp_path)["result"]["status"] == "ready_for_authorized_completion"
+    )
+    assert len(list((seeded["worker"].root / "gate-receipts").glob("*.json"))) == 1
+    assert request_count(seeded["worker"]) == 1
+
+
 def test_two_concurrent_admissions_have_one_effect_owner(tmp_path):
     seeded = seed(tmp_path)
     start = tmp_path / "start"

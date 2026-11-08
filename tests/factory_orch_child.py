@@ -68,7 +68,19 @@ def main() -> int:
         crash=crash,
     )
     gate = FakeGate(
-        root=Path(config["effects"]), evidence_dir=Path(config["artifacts"])
+        root=Path(config["effects"]),
+        evidence_dir=Path(config["artifacts"]),
+        crash=(
+            CrashPlan(
+                phase=config["gate_crash_phase"],
+                stage="run_acceptance",
+                marker_dir=Path(config["marker_dir"])
+                if config.get("marker_dir")
+                else None,
+            )
+            if config.get("gate_crash_phase")
+            else None
+        ),
     )
     reviewer = FakeReviewer(
         root=Path(config["effects"]), outcome=config.get("reviewer_outcome", "approve")

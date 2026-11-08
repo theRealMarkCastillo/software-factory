@@ -225,6 +225,8 @@ class FakeGate:
                 "base_sha": base_sha,
                 "candidate_sha": candidate_sha,
                 "outcome": self.outcome,
+                "evidence_reference": str(self.evidence_dir or ""),
+                "evidence_digest": _manifest_digest(self.evidence_dir or ""),
             },
         )
         if self.crash:

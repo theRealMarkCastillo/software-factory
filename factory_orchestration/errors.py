@@ -17,6 +17,7 @@ REASON_CODES = frozenset(
         "workspace_conflict",
         "version_mismatch",
         "stale_attempt",
+        "owner_grant_absent",
         # ownership / controls
         "cancellation_pending",
         "cancelled",
@@ -30,6 +31,8 @@ REASON_CODES = frozenset(
         "evidence_rejected",
         "review_changes",
         "review_inconclusive",
+        "review_scope_violation",
+        "review_unavailable",
         "gate_unavailable",
         "capability_unenforced",
     }

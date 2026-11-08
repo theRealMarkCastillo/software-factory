@@ -871,6 +871,182 @@ def teardown(
     )
 
 
+# ---------------------------------------------------------------------------
+# Reviewer sandbox: read-only container inspection and fixed probes
+# ---------------------------------------------------------------------------
+#
+# The R2-A reviewer runs on Hermes's Docker terminal backend. Hermes creates and
+# owns that container; factory code may only (a) read its configuration, (b) run
+# a fixed, code-owned probe inside it, and (c) remove a container that carries
+# the reviewer profile label. No caller-supplied docker arguments reach the CLI.
+
+_CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
+_LABEL_RE = re.compile(r"^[A-Za-z0-9_.:=/-]{1,128}$")
+
+#: Fixed probes used to attest the sandbox from inside. The argv is code-owned;
+#: no caller-supplied program or script text is accepted.
+CONTAINER_PROBES: dict[str, list[str]] = {
+    "identity": ["id"],
+    "capabilities": [
+        "sh",
+        "-c",
+        "grep -E '^(CapBnd|CapEff|CapPrm|NoNewPrivs)' /proc/self/status",
+    ],
+    "routes": ["sh", "-c", "cat /proc/net/route; ls /sys/class/net"],
+    "docker_socket": [
+        "sh",
+        "-c",
+        "ls -l /var/run/docker.sock 2>&1; command -v docker || echo no-docker-cli",
+    ],
+    "host_secret": [
+        "sh",
+        "-c",
+        "ls -ld /Users /.hermes 2>&1; ls -l $HOME/.hermes/auth.json 2>&1",
+    ],
+    "evidence_write": [
+        "sh",
+        "-c",
+        "touch /evidence/candidate/.factory-write-probe 2>&1; echo rc=$?",
+    ],
+    "ephemeral_write": [
+        "sh",
+        "-c",
+        "touch /tmp/.factory-probe && echo tmp-ok; touch /home/reviewer/.factory-probe && echo home-ok",
+    ],
+    "egress": [
+        "python3",
+        "-c",
+        (
+            "import socket\n"
+            "socket.setdefaulttimeout(3)\n"
+            "for target in [('1.1.1.1', 443), ('8.8.8.8', 53)]:\n"
+            "    try:\n"
+            "        s = socket.create_connection(target, 3)\n"
+            "        print('CONNECTED', target)\n"
+            "        s.close()\n"
+            "    except Exception as exc:\n"
+            "        print('DENIED', target, type(exc).__name__)\n"
+        ),
+    ],
+}
+
+
+def _assert_container_id(container_id: str) -> str:
+    value = str(container_id).strip()
+    if not _CONTAINER_ID_RE.match(value):
+        raise PolicyViolation(
+            f"container id must be a docker id (12-64 lowercase hex), got {value!r}"
+        )
+    return value
+
+
+def _label_filters(labels: dict[str, str]) -> list[str]:
+    args: list[str] = []
+    for key, value in sorted(labels.items()):
+        spec = f"{key}={value}" if value else key
+        if not _LABEL_RE.match(spec):
+            raise PolicyViolation(f"invalid docker label filter {spec!r}")
+        args += ["--filter", f"label={spec}"]
+    return args
+
+
+def find_containers(labels: dict[str, str]) -> list[str]:
+    """Return ids of containers matching *labels* (read-only ``docker ps``)."""
+
+    if not labels:
+        raise PolicyViolation("find_containers requires at least one label filter")
+    cmd = ["docker", "ps", "-a", "--quiet", *_label_filters(labels)]
+    assert_safe_command(" ".join(cmd))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60, check=False
+    )
+    if result.returncode != 0:
+        raise PolicyViolation(
+            f"docker ps failed ({result.returncode}): {result.stderr.strip()[:200]}"
+        )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def inspect_container(container_id: str) -> dict:
+    """Read-only ``docker inspect`` for one container."""
+
+    cid = _assert_container_id(container_id)
+    cmd = ["docker", "inspect", cid]
+    assert_safe_command(" ".join(cmd))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60, check=False
+    )
+    if result.returncode != 0:
+        raise PolicyViolation(
+            f"docker inspect failed ({result.returncode}): {result.stderr.strip()[:200]}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except ValueError as exc:
+        raise PolicyViolation("docker inspect did not return JSON") from exc
+    if not isinstance(payload, list) or not payload:
+        raise PolicyViolation("docker inspect returned no object")
+    return payload[0]
+
+
+def exec_container_probe(container_id: str, probe: str, *, timeout: int = 30) -> dict:
+    """Run one fixed, code-owned probe inside a reviewer container.
+
+    Refuses anything but an id in :data:`CONTAINER_PROBES`; the container must be
+    labeled ``hermes-agent=1`` so an arbitrary host container cannot be used.
+    """
+
+    cid = _assert_container_id(container_id)
+    argv = CONTAINER_PROBES.get(probe)
+    if argv is None:
+        raise PolicyViolation(f"unknown sandbox probe {probe!r}")
+    labels = (inspect_container(cid).get("Config") or {}).get("Labels") or {}
+    if labels.get("hermes-agent") != "1":
+        raise PolicyViolation(
+            f"container {cid} is not a Hermes sandbox (missing hermes-agent=1 label)"
+        )
+    cmd = ["docker", "exec", cid, *argv]
+    assert_safe_command(" ".join(cmd))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=timeout, check=False
+    )
+    return {
+        "probe": probe,
+        "argv": argv,
+        "exit_code": result.returncode,
+        "stdout": (result.stdout or "")[:4000],
+        "stderr": (result.stderr or "")[:2000],
+    }
+
+
+def remove_own_container(container_id: str, *, expected_profile: str) -> bool:
+    """Remove a container this factory caused, and only that container.
+
+    Requires the ``hermes-agent=1`` label and the exact reviewer profile label;
+    no other container can be addressed by this function.
+    """
+
+    cid = _assert_container_id(container_id)
+    if not _LABEL_RE.match(expected_profile):
+        raise PolicyViolation(f"invalid expected profile label {expected_profile!r}")
+    labels = (inspect_container(cid).get("Config") or {}).get("Labels") or {}
+    if labels.get("hermes-agent") != "1":
+        raise PolicyViolation(
+            f"refusing to remove {cid}: not a Hermes sandbox (hermes-agent=1)"
+        )
+    if labels.get("hermes-profile") != expected_profile:
+        raise PolicyViolation(
+            f"refusing to remove {cid}: hermes-profile {labels.get('hermes-profile')!r} "
+            f"is not {expected_profile!r}"
+        )
+    cmd = ["docker", "rm", "-f", cid]
+    assert_safe_command(" ".join(cmd))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60, check=False
+    )
+    return result.returncode == 0
+
+
 def get_host_ports_in_use() -> set[int]:
     """Return the set of host TCP ports currently bound by any container.
 

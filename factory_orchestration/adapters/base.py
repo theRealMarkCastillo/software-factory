@@ -6,7 +6,7 @@ adapter returns typed outcomes; a profile that prints "PASS" is never a gate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from ..operations import EffectProbe
@@ -45,6 +45,34 @@ class WorkerHandle:
     request_id: str
     pid: int | None = None
     pgid: int | None = None
+
+
+@dataclass(frozen=True)
+class AttestationReceipt:
+    """Result of an executed capability attestation (never a prompt claim)."""
+
+    enforced: bool
+    reason: str
+    detail: str = ""
+    receipt: dict = field(default_factory=dict)
+    home: str = ""
+
+    def as_dict(self) -> dict:
+        return {
+            "enforced": self.enforced,
+            "reason": self.reason,
+            "detail": self.detail,
+            "home": self.home,
+            "receipt": self.receipt,
+        }
+
+    @property
+    def digest(self) -> str:
+        import hashlib
+        import json
+
+        payload = json.dumps(self.as_dict(), sort_keys=True, separators=(",", ":"))
+        return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -128,6 +156,14 @@ class ReviewerAdapter(Protocol):
 
 
 class CapabilityAttestor(Protocol):
-    """Proves an OS-level read-only boundary before a live review may run."""
+    """Proves an OS-level read-only boundary before a live review may run.
 
-    def enforce_readonly(self, reviewer: str, workspace: str) -> bool: ...
+    ``attest`` must be executed, not asserted: it examines the effective
+    configuration, drives the real tool stack in the sandbox, and inspects the
+    resulting container. Any failure returns ``enforced=False`` with a reason
+    and no review process is started.
+    """
+
+    def attest(
+        self, *, reviewer: str, candidate: str, evidence: str
+    ) -> AttestationReceipt: ...

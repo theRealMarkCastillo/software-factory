@@ -28,7 +28,7 @@ if log:
     interesting = {
         key: value
         for key, value in os.environ.items()
-        if key.startswith("HERMES_KANBAN") or key == "HERMES_PROFILE"
+        if key.startswith("HERMES_") or key.startswith("TERMINAL_") or key.startswith("DOCKER_")
     }
     with open(log, "a") as handle:
         handle.write(json.dumps({"argv": args, "env": interesting}) + "\\n")
@@ -74,7 +74,14 @@ def stub(tmp_path: Path) -> Path:
 
 def test_board_projection_uses_the_live_run_not_claim_lock(tmp_path, stub, monkeypatch):
     monkeypatch.setenv("STUB_SHOW", str(tmp_path / "show.json"))
-    board = HermesBoard(executable=str(stub), board="software-factory")
+    monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "7")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:1")
+    board = HermesBoard(
+        executable=str(stub),
+        board="software-factory",
+        extra_env={"STUB_SHOW": str(tmp_path / "show.json")},
+    )
     attempt = Attempt(task_id=CARD, run_id=7, profile="factory-runner")
     view = board.view(attempt)
     assert view.status == "running"
@@ -85,10 +92,56 @@ def test_board_projection_uses_the_live_run_not_claim_lock(tmp_path, stub, monke
     )
 
 
+def test_board_refuses_without_a_dispatcher_grant(tmp_path, stub, monkeypatch):
+    monkeypatch.setenv("STUB_SHOW", str(tmp_path / "show.json"))
+    for name in (
+        "HERMES_KANBAN_TASK",
+        "HERMES_KANBAN_RUN_ID",
+        "HERMES_KANBAN_CLAIM_LOCK",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    board = HermesBoard(executable=str(stub), board="software-factory")
+    attempt = Attempt(task_id=CARD, run_id=7, profile="factory-runner")
+    with pytest.raises(OrchestrationError) as excinfo:
+        board.view(attempt)
+    assert excinfo.value.reason == "owner_grant_absent"
+
+
+def test_board_refuses_a_grant_for_a_different_run(tmp_path, stub, monkeypatch):
+    monkeypatch.setenv("STUB_SHOW", str(tmp_path / "show.json"))
+    monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "8")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:1")
+    board = HermesBoard(executable=str(stub), board="software-factory")
+    attempt = Attempt(task_id=CARD, run_id=7, profile="factory-runner")
+    with pytest.raises(OrchestrationError) as excinfo:
+        board.view(attempt)
+    assert excinfo.value.reason == "stale_attempt"
+
+
+def test_superseded_run_is_not_current_even_with_a_grant(tmp_path, stub, monkeypatch):
+    # A heartbeat only refreshes liveness; once the board no longer lists the run
+    # as live, the attempt cannot act (T4 stale-attempt fencing).
+    monkeypatch.setenv("STUB_SHOW", str(tmp_path / "show.json"))
+    monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "6")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:1")
+    payload = json.loads((tmp_path / "show.json").read_text())
+    payload["runs"] = [{"id": 6, "profile": "factory-runner", "status": "failed"}]
+    (tmp_path / "show.json").write_text(json.dumps(payload))
+    board = HermesBoard(executable=str(stub), board="software-factory")
+    attempt = Attempt(task_id=CARD, run_id=6, profile="factory-runner")
+    assert board.view(attempt).current(attempt) is False
+
+
 def test_heartbeat_is_run_scoped(tmp_path, stub, monkeypatch):
     log = tmp_path / "calls.jsonl"
     monkeypatch.setenv("STUB_LOG", str(log))
-    board = HermesBoard(executable=str(stub), board="software-factory")
+    board = HermesBoard(
+        executable=str(stub),
+        board="software-factory",
+        extra_env={"STUB_LOG": str(log), "STUB_SHOW": str(tmp_path / "show.json")},
+    )
     attempt = Attempt(
         task_id=CARD, run_id=7, profile="factory-runner", claim_lock="host:1"
     )
@@ -97,6 +150,15 @@ def test_heartbeat_is_run_scoped(tmp_path, stub, monkeypatch):
     assert payload["env"]["HERMES_KANBAN_RUN_ID"] == "7"
     assert payload["env"]["HERMES_KANBAN_CLAIM_LOCK"] == "host:1"
     monkeypatch.setenv("STUB_HEARTBEAT_EXIT", "1")
+    board = HermesBoard(
+        executable=str(stub),
+        board="software-factory",
+        extra_env={
+            "STUB_LOG": str(log),
+            "STUB_SHOW": str(tmp_path / "show.json"),
+            "STUB_HEARTBEAT_EXIT": "1",
+        },
+    )
     assert board.heartbeat(attempt) is False
 
 
@@ -128,8 +190,23 @@ def test_worker_invocation_uses_stream_json_and_scrubs_ownership(
     log = tmp_path / "calls.jsonl"
     monkeypatch.setenv("STUB_LOG", str(log))
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_deadbeef")
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "12")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:1")
+    monkeypatch.setenv("HERMES_PROFILE", "factory-architect")
+    monkeypatch.setenv("HERMES_ACCEPT_HOOKS", "1")
+    monkeypatch.setenv("TERMINAL_BACKEND", "local")
+    monkeypatch.setenv("DOCKER_HOST", "unix:///tmp/other.sock")
+    monkeypatch.setenv("HERMES_DELEGATED_CHILD_CONTEXT", "/board/root")
     root = tmp_path / "artifacts"
-    worker = HermesWorker(artifact_root=root, executable=str(stub))
+    worker = HermesWorker(
+        artifact_root=root,
+        executable=str(stub),
+        extra_env={
+            "STUB_LOG": str(log),
+            "STUB_SHOW": str(tmp_path / "show.json"),
+            "STUB_CHAT_EXIT": "0",
+        },
+    )
     request = _request(tmp_path)
     submitted = worker.submit(request)
     _result_file(root, request.operation_key).write_text(
@@ -158,12 +235,29 @@ def test_worker_invocation_uses_stream_json_and_scrubs_ownership(
     call = json.loads(log.read_text().splitlines()[-1])
     assert call["argv"][:3] == ["-p", "factory-runner", "chat"]
     assert "--format" in call["argv"] and "stream-json" in call["argv"]
-    assert "HERMES_KANBAN_TASK" not in call["env"]
+    env = call["env"]
+    for forbidden in (
+        "HERMES_KANBAN_TASK",
+        "HERMES_KANBAN_RUN_ID",
+        "HERMES_KANBAN_CLAIM_LOCK",
+        "HERMES_PROFILE",
+        "HERMES_ACCEPT_HOOKS",
+        "HERMES_HOME",
+        "TERMINAL_BACKEND",
+        "DOCKER_HOST",
+    ):
+        assert forbidden not in env, forbidden
+    # The delegation fence is a guard marker: preserved verbatim, never deleted.
+    assert env["HERMES_DELEGATED_CHILD_CONTEXT"] == "/board/root"
 
 
 def test_worker_failure_is_a_typed_outcome(tmp_path, stub, monkeypatch):
     monkeypatch.setenv("STUB_CHAT_EXIT", "1")
-    worker = HermesWorker(artifact_root=tmp_path / "artifacts", executable=str(stub))
+    worker = HermesWorker(
+        artifact_root=tmp_path / "artifacts",
+        executable=str(stub),
+        extra_env={"STUB_CHAT_EXIT": "1"},
+    )
     request = _request(tmp_path)
     submitted = worker.submit(request)
     deadline = time.time() + 20
@@ -180,7 +274,10 @@ def test_worker_failure_is_a_typed_outcome(tmp_path, stub, monkeypatch):
 def test_worker_cancellation_targets_its_own_process_group(tmp_path, stub, monkeypatch):
     monkeypatch.setenv("STUB_CHAT_SLEEP", "30")
     worker = HermesWorker(
-        artifact_root=tmp_path / "artifacts", executable=str(stub), terminate_grace_s=2
+        artifact_root=tmp_path / "artifacts",
+        executable=str(stub),
+        terminate_grace_s=2,
+        extra_env={"STUB_CHAT_SLEEP": "30"},
     )
     submitted = worker.submit(_request(tmp_path))
     report = worker.cancel(submitted.handle)
@@ -209,7 +306,10 @@ def test_live_reviewer_refuses_unenforced_readonly(tmp_path):
     assert "blocked, not passed" in excinfo.value.detail
 
 
-def test_missing_executable_is_reported_as_unavailable(tmp_path):
+def test_missing_executable_is_reported_as_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "1")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:1")
     board = HermesBoard(executable=str(tmp_path / "absent"))
     with pytest.raises(OrchestrationError) as excinfo:
         board.view(Attempt(task_id=CARD, run_id=1, profile="factory-runner"))

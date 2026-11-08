@@ -92,6 +92,53 @@ def test_installed_launcher_rejects_duplicate_keys_without_running_it(tmp_path):
     assert outcome.reason.startswith("duplicate_json_keys")
 
 
+def test_run_acceptance_discovers_runner_project_artifacts(tmp_path):
+    seeded = seed(tmp_path)
+    artifacts = tmp_path / "run-artifacts"
+    stub = tmp_path / "acceptance-stub"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'mkdir -p "$ARTIFACTS/factory-project-1"\n'
+        'printf \'{"ok": true}\\n\' > "$ARTIFACTS/factory-project-1/evidence-manifest.json"\n'
+        "exit 0\n"
+    )
+    stub.chmod(0o755)
+    gate = InstalledLauncherGate(Path(stub), tmp_path / "receipts")
+    outcome = gate.run_acceptance(
+        operation_key="sha256:" + "e" * 64,
+        attempt=seeded["attempt"],
+        workspace=str(seeded["workspace"]),
+        base_sha=seeded["base"],
+        candidate_sha=seeded["candidate"],
+        argv=("/usr/bin/env", f"ARTIFACTS={artifacts}", str(stub)),
+        artifacts=str(artifacts),
+        timeout_s=30,
+    )
+    assert outcome.outcome == "pass"
+    assert outcome.evidence_reference.endswith("factory-project-1")
+    assert outcome.evidence_digest.startswith("sha256:")
+
+
+def test_run_acceptance_without_manifest_is_inconclusive(tmp_path):
+    seeded = seed(tmp_path)
+    stub = tmp_path / "no-manifest-stub"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    gate = InstalledLauncherGate(Path(stub), tmp_path / "receipts")
+    outcome = gate.run_acceptance(
+        operation_key="sha256:" + "f" * 64,
+        attempt=seeded["attempt"],
+        workspace=str(seeded["workspace"]),
+        base_sha=seeded["base"],
+        candidate_sha=seeded["candidate"],
+        argv=(str(stub),),
+        artifacts=str(tmp_path / "empty-artifacts"),
+        timeout_s=30,
+    )
+    assert outcome.outcome == "inconclusive"
+    assert outcome.reason == "protocol_error"
+
+
 def test_admission_disabled_refuses_without_touching_the_workspace(tmp_path):
     seeded = seed(tmp_path)
     (seeded["state_dir"] / "admission.json").write_text(

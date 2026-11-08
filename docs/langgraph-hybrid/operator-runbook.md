@@ -146,22 +146,42 @@ claim is made; the pilot produces the first observed values.
 | T5 evidence negatives | real engine verifier reasons for diagnostic, teardown, safety, candidate, log tamper, missing log, duplicate keys | `tests/test_orchestration_evidence.py` |
 | T6 independent review | implementer self-approval refused; inconclusive review holds; review bound to another candidate refused | `tests/test_orchestration_flow.py::test_implementer_cannot_approve_its_own_candidate`, `::test_review_bound_to_a_different_candidate_is_rejected`, `::test_inconclusive_review_holds_without_repair` |
 | T7 repair budget | three submissions, two repairs, restart does not reset | `tests/test_orchestration_flow.py::test_review_changes_cycle_through_bounded_repairs`, `::test_restart_cannot_reset_the_repair_budget` |
-| T8 installed identity | launcher/ready/deployment/policy hashes, engine fingerprint recomputation, real installed verifier negative | `tests/test_orchestration_installed.py`, `evidence/g0-capture.json` |
+| T8 installed identity | launcher/ready/deployment/policy hashes, engine fingerprint recomputation, installed verifier negative, and a full installed `factory run` acceptance on a disposable repo | `tests/test_orchestration_installed.py`, `scripts/langgraph_pilot_acceptance.py`, `evidence/installed-acceptance.json`, `evidence/g0-capture.json` |
 | T9 opt-in/rollback | admission disabled refuses before any effect; active graph drains; rollback keeps checkpoints readable | `tests/test_orchestration_installed.py` |
 | T10 read-only capability | **blocked**: no enforced boundary; live reviewer refuses with `capability_unenforced`; fake/offline adapters deny mutation | `tests/test_orchestration_hermes.py::test_live_reviewer_refuses_unenforced_readonly` |
 | T11 mismatch holds | moved base, changed spec, changed graph version, unrecognized release | `tests/test_orchestration_recovery.py::test_moved_base_and_changed_spec_fail_closed`, `::test_unrecognized_release_and_graph_version_hold` |
-| T12 metrics | observed intervention/diagnosis measurements; explicit baseline gap | `tests/test_orchestration_cli.py::test_metrics_report_observed_values_without_a_baseline` |
+| T12 metrics | observed intervention/diagnosis measurements on one pilot run; explicit baseline gap | `tests/test_orchestration_cli.py::test_metrics_report_observed_values_without_a_baseline`, `evidence/pilot-run.json` |
+
+## Pilot observation (T8/T12)
+
+```sh
+uv run --extra orchestration python scripts/langgraph_pilot_acceptance.py --run \
+  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-installed-acceptance
+```
+
+The script builds a disposable repository (one busybox service, no host ports,
+no mounts), runs `bin/factory run` and `bin/factory verify`, then drives one
+graph whose acceptance goes through the installed launcher. Observed on
+2026-11-08: installed run exit `0`, installed verify exit `0` (`ok`), graph
+status `ready_for_authorized_completion`, 10 stage transitions, 2 s elapsed,
+0 interventions, 0 repairs. Captured in `evidence/installed-acceptance.json`,
+`evidence/pilot-run.json` and the two `evidence/*-acceptance/` directories.
+
+The installed runner writes evidence into `<artifacts-root>/<factory-project>/`;
+`InstalledLauncherGate` discovers exactly one current project directory and
+reports `inconclusive` when the choice is ambiguous — it never guesses.
 
 ## Known gaps in this increment
 
 - **T10 live read-only review:** blocked, not passed. There is no OS-level
   read-only boundary for same-UID Hermes profiles (`file` includes write tools;
-  `terminal`/`execute_code` can write). A live reviewer is refused.
-- **T8 full installed acceptance:** only the installed verifier is exercised
-  (read-only, offline). A real `factory run` acceptance needs Docker and an
-  authorized disposable project; that authorization has not been granted.
-- **T12 baseline:** no historical measurements exist; the pilot reports observed
-  values and the gap explicitly.
+  `terminal`/`execute_code` can write). A live reviewer is refused; extension
+  proposal card `t_2abae28a`.
+- **T8 full production acceptance:** the installed acceptance was exercised on a
+  disposable repository only. Enrollment on a real card still needs an operator
+  decision and a current Hermes attempt.
+- **T12 baseline:** no historical measurements exist; the pilot contributes one
+  observed run (n=1) and reports the gap rather than an improvement claim.
 - **Live worker completions:** the live worker contract requires the worker to
   write `worker-result.json` with its attempt identity and candidate. A worker
   that exits 0 without it is reported `ambiguous` and the graph holds.

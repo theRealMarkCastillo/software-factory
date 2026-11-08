@@ -181,7 +181,7 @@ class InstalledLauncherGate:
                 "gate_unavailable", f"acceptance could not start: {exc}"
             ) from exc
 
-        manifest = Path(artifacts) / "evidence-manifest.json"
+        manifest = _latest_manifest(Path(artifacts))
         _write_receipt(
             self._receipt_path(operation_key),
             {
@@ -190,22 +190,23 @@ class InstalledLauncherGate:
                 "exit_code": exit_code,
                 "stdout": str(stdout_path),
                 "stderr": str(stderr_path),
+                "evidence_reference": str(manifest.parent) if manifest else "",
+                "evidence_digest": (
+                    "sha256:" + _file_sha256(manifest) if manifest else ""
+                ),
             },
         )
         if exit_code == 0:
-            if not manifest.is_file():
+            if manifest is None:
                 return GateOutcome(
                     "inconclusive",
                     reason="protocol_error",
                     detail="launcher exited 0 without an evidence manifest",
                 )
-            import hashlib
-
             return GateOutcome(
                 "pass",
-                evidence_reference=str(Path(artifacts)),
-                evidence_digest="sha256:"
-                + hashlib.sha256(manifest.read_bytes()).hexdigest(),
+                evidence_reference=str(manifest.parent),
+                evidence_digest="sha256:" + _file_sha256(manifest),
             )
         if exit_code == 2:
             return GateOutcome(
@@ -215,7 +216,8 @@ class InstalledLauncherGate:
             )
         return GateOutcome(
             "fail",
-            reason=_reason_from_manifest(manifest) or f"launcher_exit_{exit_code}",
+            reason=(_reason_from_manifest(manifest) if manifest else "")
+            or f"launcher_exit_{exit_code}",
             detail=str(stderr_path),
         )
 
@@ -266,3 +268,34 @@ def _reason_from_manifest(manifest: Path) -> str:
         return ""
     evidence = payload.get("evidence") or payload
     return str(evidence.get("reason") or "")
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _latest_manifest(artifacts: Path) -> Path | None:
+    """Find the manifest the installed runner wrote.
+
+    ``factory-run`` writes into ``<artifacts-root>/<factory-project>/``; a direct
+    manifest in the given directory is also accepted. More than one project
+    directory with the same newest timestamp is ambiguous and returns ``None``
+    so the caller reports ``inconclusive`` instead of guessing.
+    """
+
+    direct = artifacts / "evidence-manifest.json"
+    if direct.is_file():
+        return direct
+    candidates = [
+        path for path in artifacts.glob("*/evidence-manifest.json") if path.is_file()
+    ]
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    newest = max(candidates, key=lambda path: path.stat().st_mtime)
+    newest_time = newest.stat().st_mtime
+    tied = [path for path in candidates if path.stat().st_mtime == newest_time]
+    return newest if len(tied) == 1 else None

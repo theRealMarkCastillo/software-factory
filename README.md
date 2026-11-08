@@ -80,6 +80,14 @@ skills are installed separately from this checkout.
 | `factory.verify` | Read-only verification of evidence against a candidate/base revision | No |
 | Curated skills | Intake, dispatch, worker behavior, QC | Hermes integration |
 | Board and profiles | Scheduling, worker permissions, lifecycle transitions | Hermes installation |
+| `factory_orchestration` (optional) | Intra-card LangGraph stages, durable checkpoints, effect reconciliation | Hermes integration, opt-in |
+
+The optional orchestration extra (`uv sync --extra orchestration`) adds an
+explicit, versioned LangGraph workflow around one bounded card. It does not
+replace Hermes scheduling or the engine gates, and it is disabled unless a card
+is enrolled. See [ownership and design](docs/langgraph-hybrid/ownership-and-design.md),
+the [operator runbook](docs/langgraph-hybrid/operator-runbook.md), and the
+[G0 capability map](docs/langgraph-hybrid/g0-capabilities.md).
 
 The engine retains installation-specific defaults: the artifact directory is
 under `~/.hermes`, the runner coverage base is `main`, and policy defaults include

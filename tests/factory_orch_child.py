@@ -93,19 +93,13 @@ def main() -> int:
     try:
         action = config.get("action", "run")
         if action == "cancel":
-            outcome = cancel(
-                deps,
-                thread_id(assignment),
-                by="test-child",
-                attempt=attempt,
-                assignment=assignment,
-            )
+            outcome = cancel(deps, thread_id(assignment), by="test-child")
             payload = {"ok": True, "cancel": outcome}
         elif action == "resume":
             payload_path = Path(config["resume_payload"])
             resumed = resume(
                 deps,
-                assignment,
+                thread_id(assignment),
                 attempt,
                 payload=json.loads(payload_path.read_text()),
                 resolved_hold=config.get("resolved_hold", "test resume"),

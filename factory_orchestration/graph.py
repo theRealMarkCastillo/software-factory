@@ -699,6 +699,13 @@ def build_graph(deps: Deps, checkpointer=None):
         )
         if resolution.action == "hold":
             raise OrchestrationError("effect_unknown", resolution.detail)
+        if resolution.action in {"adopt", "replay"}:
+            stored = resolution.receipt
+            if stored is None:
+                operations[key].update({"state": "submitted"})
+                return _advance(state, "await_review", operations=operations)
+            review = _review_from_payload({"review": stored}, _attempt(state))
+            return _apply_review(state, key, review, {"operations": operations})
         deps.store.mark_operation(key, "submitted")
         handle, inline = deps.reviewer.submit(
             operation_key=key,

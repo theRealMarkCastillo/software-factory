@@ -130,7 +130,7 @@ def test_implementer_cannot_approve_its_own_candidate(tmp_path):
 
     result = resume(
         seeded["deps"],
-        seeded["assignment"],
+        thread_id(seeded["assignment"]),
         seeded["attempt"],
         payload=payload,
         resolved_hold="awaiting independent review",
@@ -157,7 +157,7 @@ def test_review_bound_to_a_different_candidate_is_rejected(tmp_path):
 
     result = resume(
         seeded["deps"],
-        seeded["assignment"],
+        thread_id(seeded["assignment"]),
         seeded["attempt"],
         payload=payload,
         resolved_hold="awaiting independent review",
@@ -191,7 +191,7 @@ def test_worker_wait_is_persisted_and_resumes_without_resubmission(tmp_path):
     }
     result = resume(
         seeded["deps"],
-        seeded["assignment"],
+        thread_id(seeded["assignment"]),
         seeded["attempt"],
         payload={"receipt": receipt},
         resolved_hold="worker request awaited",

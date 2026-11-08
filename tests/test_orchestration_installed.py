@@ -141,13 +141,7 @@ def test_rollback_cancels_and_leaves_state_readable(tmp_path):
     drive(seeded["deps"], seeded["assignment"], seeded["attempt"])
     thread = thread_id(seeded["assignment"])
 
-    outcome = cancel(
-        seeded["deps"],
-        thread,
-        by="rollback-test",
-        attempt=seeded["attempt"],
-        assignment=seeded["assignment"],
-    )
+    outcome = cancel(seeded["deps"], thread, by="rollback-test")
     assert outcome["status"] == "cancelled"
 
     view = inspect_run(seeded["deps"], thread)

@@ -105,8 +105,6 @@ def drive(
         if state:
             _require_matching_versions(state)
             _require_matching_spec(state)
-        if store.cancel_requested(thread) and resume_payload is None:
-            resume_payload = {"kind": "cancelled"}
 
         with _checkpoint_saver(store) as saver:
             graph = build_graph(deps, saver)
@@ -120,17 +118,24 @@ def drive(
                     initial_state(assignment, attempt, owner_token=owner.token),
                     config,
                 )
-            elif resume_payload is not None:
-                from langgraph.types import Command
+            else:
+                if (
+                    resume_payload is None
+                    and snapshot.next
+                    and store.cancel_requested(thread)
+                ):
+                    resume_payload = {"kind": "cancelled"}
+                if resume_payload is not None and snapshot.next:
+                    from langgraph.types import Command
 
-                graph.invoke(Command(resume=resume_payload), config)
-            elif snapshot.next and _interrupt_payload(snapshot) is not None:
-                # A persisted wait: return it instead of sleeping or advancing.
-                pass
-            elif snapshot.next:
-                # A node died mid-execution without an interrupt. Continue it;
-                # its operation journal reconciles any effect it had started.
-                graph.invoke(None, config)
+                    graph.invoke(Command(resume=resume_payload), config)
+                elif snapshot.next and _interrupt_payload(snapshot) is not None:
+                    # A persisted wait: return it instead of sleeping or advancing.
+                    pass
+                elif snapshot.next:
+                    # A node died mid-execution without an interrupt. Continue it;
+                    # its operation journal reconciles any effect it had started.
+                    graph.invoke(None, config)
             snapshot = graph.get_state(config)
             values = _graph_state(graph, config)
             awaiting = (
@@ -192,7 +197,7 @@ def _require_matching_spec(state: dict) -> None:
 
 def resume(
     deps: Deps,
-    assignment: RunAssignment,
+    thread: str,
     attempt: Attempt,
     *,
     payload: dict,
@@ -204,7 +209,6 @@ def resume(
         raise OrchestrationError(
             "invalid_assignment", "resume must name the hold it resolves"
         )
-    thread = thread_id(assignment)
     store = deps.store
     existing = store.run(thread)
     if existing is None:
@@ -227,9 +231,34 @@ def resume(
             {"from": state.get("hermes_attempt_id"), "to": attempt.run_id},
         )
     store.event(thread, "resume_requested", {"resolved_hold": resolved_hold})
-    result = drive(deps, assignment, attempt, resume_payload=payload)
+    result = drive(deps, assignment_from_state(state), attempt, resume_payload=payload)
     return replace(
         result, state={**result.state, "hermes_attempt_id": str(attempt.run_id)}
+    )
+
+
+def assignment_from_state(state: dict) -> RunAssignment:
+    """Rebuild the reviewed assignment from the checkpoint, never from prose."""
+
+    return RunAssignment(
+        board_id=state["board_id"],
+        card_id=state["card_id"],
+        repository=state["repository"],
+        workspace_path=state["workspace_path"],
+        immutable_base_sha=state["immutable_base_sha"],
+        spec_reference=state["spec_reference"],
+        spec_digest=state["spec_digest"],
+        template_id=state["template_id"],
+        worker_profile=state["worker_profile"],
+        reviewer_profile=state["reviewer_profile"],
+        acceptance_argv=tuple(state.get("acceptance_argv") or ("true",)),
+        acceptance_artifacts=state.get("acceptance_artifacts")
+        or state["workspace_path"],
+        engine_release_reference=state["engine_release_reference"],
+        engine_fingerprint=state["engine_fingerprint"],
+        host_policy_digest=state["host_policy_digest"],
+        max_repairs=int(state["max_repairs"]),
+        cost_budget=state.get("cost_budget", "unknown"),
     )
 
 
@@ -239,8 +268,6 @@ def cancel(
     *,
     by: str,
     reason: str = "",
-    attempt: Attempt | None = None,
-    assignment: RunAssignment | None = None,
 ) -> dict:
     """Close admission for new effects and reconcile owned operations.
 
@@ -254,14 +281,6 @@ def cancel(
     existing = store.run(thread)
     if existing is None:
         raise OrchestrationError("invalid_assignment", f"no admitted run {thread}")
-    if assignment is None or attempt is None:
-        attempt = Attempt(
-            task_id=existing["hermes_task_id"],
-            run_id=int(existing["hermes_run_id"]),
-            profile=existing["profile"],
-            claim_lock=existing["claim_lock"],
-        )
-        assignment = _assignment_from_run(existing)
 
     lock = CoordinatorLock(deps.state_dir, thread)
     try:
@@ -305,27 +324,6 @@ def cancel(
         "detail": values.get("last_reason_detail", ""),
         "new_request": created,
     }
-
-
-def _assignment_from_run(run: dict) -> RunAssignment:
-    return RunAssignment(
-        board_id=run["board_id"],
-        card_id=run["card_id"],
-        repository=run["repository"],
-        workspace_path=run["workspace_path"],
-        immutable_base_sha=run["base_sha"],
-        spec_reference=run["spec_reference"],
-        spec_digest=run["spec_digest"],
-        template_id=run["template_id"],
-        worker_profile=run["profile"],
-        reviewer_profile=run["profile"] + "-qa",
-        acceptance_argv=("true",),
-        acceptance_artifacts=run["workspace_path"],
-        engine_release_reference=run["engine_release_reference"],
-        engine_fingerprint=run["engine_fingerprint"],
-        host_policy_digest=run["host_policy_digest"],
-        max_repairs=int(run["max_repairs"]),
-    )
 
 
 def inspect_run(deps: Deps, thread: str) -> dict:

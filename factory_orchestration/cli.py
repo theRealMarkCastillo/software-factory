@@ -163,7 +163,6 @@ def _dispatch(args, store: RunStore, state_dir: Path) -> int:
         run_row = store.run(thread)
         if run_row is None:
             raise OrchestrationError("invalid_assignment", f"no admitted run {thread}")
-        assignment = _assignment_from_run_row(run_row)
         attempt = Attempt(
             task_id=run_row["hermes_task_id"],
             run_id=int(args.attempt_run_id or run_row["hermes_run_id"]),
@@ -173,7 +172,7 @@ def _dispatch(args, store: RunStore, state_dir: Path) -> int:
         payload = json.loads(Path(args.payload).read_text())
         result = resume(
             deps,
-            assignment,
+            thread,
             attempt,
             payload=payload,
             resolved_hold=args.resolved_hold,
@@ -233,27 +232,6 @@ def _thread_for_card(store: RunStore, card: str) -> str:
         if str(row["thread_id"]).endswith(f":{card}"):
             return str(row["thread_id"])
     raise OrchestrationError("invalid_assignment", f"no admitted run for card {card}")
-
-
-def _assignment_from_run_row(run: dict) -> RunAssignment:
-    return RunAssignment(
-        board_id=run["board_id"],
-        card_id=run["card_id"],
-        repository=run["repository"],
-        workspace_path=run["workspace_path"],
-        immutable_base_sha=run["base_sha"],
-        spec_reference=run["spec_reference"],
-        spec_digest=run["spec_digest"],
-        template_id=run["template_id"],
-        worker_profile=run["profile"],
-        reviewer_profile=run["profile"] + "-qa",
-        acceptance_argv=("true",),
-        acceptance_artifacts=run["workspace_path"],
-        engine_release_reference=run["engine_release_reference"],
-        engine_fingerprint=run["engine_fingerprint"],
-        host_policy_digest=run["host_policy_digest"],
-        max_repairs=int(run["max_repairs"]),
-    )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -2,7 +2,7 @@
 
 Date: 2026-11-08
 Implementation revision under review:
-**`bfa7608c020555fdf6a10e4f45e9be9de74a7a41`**
+**`ab9f8c55accfa0d88fbf57236e20662de8953017`**
 Evidence commit: the commit that adds this file. Its parent is the
 implementation revision above; this record is the only change it adds.
 Branch: `feat/langgraph-hybrid-orchestration` (worktree

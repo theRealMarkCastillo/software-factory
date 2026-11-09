@@ -948,6 +948,9 @@ class HermesReviewer:
             }
         else:
             payload = audit["verdict"]
+        # The audit embeds the verdict; copy so attaching the audit does not
+        # create a cycle (verdict -> audit -> verdict) in the durable receipt.
+        payload = dict(payload)
         payload["audit"] = audit
         durable = self._durable_payload(key, payload)
         result_path.parent.mkdir(parents=True, exist_ok=True)

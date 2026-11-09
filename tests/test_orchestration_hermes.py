@@ -460,6 +460,49 @@ def test_compact_review_result_fails_closed_not_keyerror(tmp_path):
     assert "review receipt" in excinfo.value.detail
 
 
+def test_reviewer_writes_a_complete_durable_receipt(tmp_path):
+    key = "run:request_independent_review:write"
+    directory = tmp_path / "hermes-reviewer" / key.replace(":", "_")
+    directory.mkdir(parents=True)
+    (directory / "stream.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "tool_use",
+                "name": "read_file",
+                "input": {"path": "/evidence/candidate/README.md"},
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "type": "result",
+                "exit_code": 0,
+                "text": '{"outcome":"approve","comment":"ok"}',
+            }
+        )
+        + "\n"
+    )
+    reviewer = HermesReviewer(HermesWorker(artifact_root=tmp_path))
+    reviewer._records[key] = {
+        "attempt": {"task_id": CARD, "run_id": 7, "profile": "factory-runner"},
+        "reviewer": "factory-qa",
+        "candidate_sha": "a" * 40,
+        "base_sha": "b" * 40,
+        "spec_digest": "sha256:" + "c" * 64,
+        "evidence_digest": "sha256:" + "d" * 64,
+        "attestation_digest": "sha256:" + "e" * 64,
+        "transcript": str(directory / "stream.jsonl"),
+        "result_path": str(directory / "review-result.json"),
+    }
+    review = reviewer._read_review(key, exit_code=0)
+    assert review is not None and review.outcome == "approve"
+    payload = json.loads((directory / "review-result.json").read_text())
+    assert payload["schema"] == "factory-review-result/v1"
+    assert payload["candidate_sha"] == "a" * 40
+    assert payload["audit"]["verdict"]["outcome"] == "approve"
+    assert payload["audit"]["violations"] == []
+
+
 def test_missing_executable_is_reported_as_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
     monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "1")

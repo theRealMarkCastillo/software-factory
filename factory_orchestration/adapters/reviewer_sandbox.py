@@ -736,7 +736,10 @@ class SandboxedReadonlyAttestor:
             result = _run(
                 [self.executable, "config", "get", key, "--json"],
                 env=env,
-                timeout=300,
+                # A fresh disposable home bootstraps its runtime on first use
+                # (uv builds the isolated environment). The timeout is not the
+                # security boundary; every measured value still has to pass.
+                timeout=900,
             )
             if result.returncode != 0:
                 raise OrchestrationError(
@@ -1023,7 +1026,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _config_json(executable: str, key: str, env: dict[str, str]) -> Any:
-    result = _run([executable, "config", "get", key, "--json"], env=env, timeout=300)
+    result = _run([executable, "config", "get", key, "--json"], env=env, timeout=900)
     if result.returncode != 0:
         raise OrchestrationError(
             "capability_unenforced",

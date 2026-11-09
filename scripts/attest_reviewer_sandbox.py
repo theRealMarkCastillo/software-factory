@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -40,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--image", default="")
     parser.add_argument("--hermes", default="hermes")
+    parser.add_argument(
+        "--revision", default="", help="engine revision the evidence is bound to"
+    )
     args = parser.parse_args(argv)
 
     attestor = SandboxedReadonlyAttestor(
@@ -50,8 +56,17 @@ def main(argv: list[str] | None = None) -> int:
         candidate=str(args.candidate),
         evidence=str(args.evidence),
     )
+    document = receipt.as_dict()
+    document["provenance"] = {
+        "revision": args.revision or _git_revision(),
+        "candidate": str(args.candidate.resolve()),
+        "evidence": str(args.evidence.resolve()),
+        "generated_at": int(time.time()),
+        "hermes": args.hermes,
+        "host": platform.node(),
+    }
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(receipt.as_dict(), indent=2, sort_keys=True) + "\n")
+    args.out.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
     print(
         json.dumps(
             {
@@ -59,11 +74,22 @@ def main(argv: list[str] | None = None) -> int:
                 "reason": receipt.reason,
                 "detail": receipt.detail,
                 "out": str(args.out),
+                "revision": document["provenance"]["revision"],
             },
             indent=2,
         )
     )
     return 0 if receipt.enforced else 2
+
+
+def _git_revision() -> str:
+    result = subprocess.run(
+        ["git", "-C", str(Path(__file__).resolve().parent.parent), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 if __name__ == "__main__":

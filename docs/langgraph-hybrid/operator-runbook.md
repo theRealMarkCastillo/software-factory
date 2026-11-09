@@ -170,7 +170,7 @@ The script builds a disposable repository (one busybox service, no host ports,
 no mounts), runs `bin/factory run` and `bin/factory verify`, then drives one
 graph whose acceptance goes through the installed launcher. Observed on
 2026-11-08: installed run exit `0`, installed verify exit `0` (`ok`), graph
-status `ready_for_authorized_completion`, 10 stage transitions, 2 s elapsed,
+status `ready_for_authorized_completion`, 10 stage transitions, 1 s elapsed,
 0 interventions, 0 repairs. Captured in `evidence/installed-acceptance.json`,
 `evidence/pilot-run.json` and the two `evidence/*-acceptance/` directories.
 

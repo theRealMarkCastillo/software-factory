@@ -66,16 +66,17 @@ Host-side acceptance (real Docker, disposable scratch only):
 
 ```sh
 .venv/bin/python scripts/langgraph_pilot_acceptance.py --run \
-  --scratch .../scratch/lg-installed-acceptance-r2
+  --scratch .../scratch/lg-installed-acceptance-r3
 # installed run exit 0; installed verify exit 0 (reason ok, 21/21 checks);
-# graph status ready_for_authorized_completion, 10 transitions, 2 s, 0/0
+# graph status ready_for_authorized_completion, 10 transitions, 1 s, 0/0;
+# base 1ae0c025…, candidate 45acd1d4…
 # -> evidence/installed-acceptance.json, evidence/pilot-run.json
 
 .venv/bin/python scripts/langgraph_hermes_acceptance.py --run \
-  --scratch .../scratch/lg-hermes-acceptance
+  --scratch .../scratch/lg-hermes-acceptance-r3
 # real Hermes worker + attested reviewer + installed gate
-# ready_for_authorized_completion, 11 transitions, 41 s, 0 interventions,
-# 0 repairs, candidate 73a225b0…, approval sha256:bbef737f…
+# ready_for_authorized_completion, 11 transitions, 126.3 s, 0 interventions,
+# 0 repairs, candidate 09758868…, approval sha256:cfe85e69…
 # -> evidence/hermes-graph-run/
 
 .venv/bin/python scripts/live_review_fixture.py --run \
@@ -101,23 +102,28 @@ Host-side acceptance (real Docker, disposable scratch only):
 | T9 opt-in / rollback | PASS | disabled admission refuses before effect; drain allowed; rollback keeps checkpoints readable and legacy cards operable (`tests/test_orchestration_installed.py`) |
 | T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox` (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
 | T11 mismatch holds | PASS | moved base, changed spec, changed graph/schema, changed engine/policy identity and unrecognized release produce holds; no silent migration (`tests/test_orchestration_recovery.py`) |
-| T12 metrics | PARTIAL | observed values only: fixture pilot 2 s / 10 transitions / 0 interventions / 0 repairs; real-worker graph 41 s / 11 transitions / 0 interventions / 0 repairs; historical baseline unavailable and reported as a gap (`evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json`) |
+| T12 metrics | PARTIAL | observed values only: fixture pilot 1 s / 10 transitions / 0 interventions / 0 repairs; real-worker graph 126 s / 11 transitions / 0 interventions / 0 repairs; historical baseline unavailable and reported as a gap (`evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json`) |
 
 ## What was actually executed
 
 - Offline pytest suite with the real engine verifier (`factory.evidence`).
 - Real LangGraph graph compilation and SQLite checkpoint/resume across process
   death (child processes, durable targets inspected).
-- One full installed acceptance on a disposable repository:
-  `bin/factory run` started one busybox service (no host ports, no protected
-  projects), exited 0, and `bin/factory verify` certified the evidence (exit 0,
-  reason `ok`, 21 checks).
+- One full installed acceptance on a disposable repository, re-run at this
+  revision: `bin/factory run` started one busybox service (no host ports, no
+  protected projects), exited 0, and `bin/factory verify` certified the evidence
+  (exit 0, reason `ok`, 21 checks). The same verifier was re-run independently
+  against the committed artifacts (exit 0, reason `ok`).
 - One graph pilot run whose acceptance and verification went through the
   installed launcher; worker/reviewer were deterministic fixtures.
 - One graph run with the **real** Hermes worker adapter (`hermes -p
   factory-runner chat`, loopback scripted provider) and the **real** attested
-  sandboxed reviewer, through the installed gate. Candidate commit, evidence
-  digest and approval reference are recorded; `0` repairs.
+  sandboxed reviewer, through the installed gate, re-run at this revision.
+  Candidate commit, evidence digest and approval reference are recorded; `0`
+  repairs. Its acceptance directory verifies independently (exit 0, reason
+  `ok`). Per-run worker/reviewer artifact directories are retained under
+  `evidence/hermes-graph-run/{worker,review}-artifacts/` keyed by request
+  digest; `run.json` identifies the current run's requests.
 - One **real-provider** review through the attested sandbox, reproducible with
   `scripts/live_review_fixture.py`; verdict `approve`, 17 audited tool uses,
   no scope violation. Its attestation receipt (`live-review-attestation.json`)

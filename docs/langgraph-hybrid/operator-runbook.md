@@ -78,6 +78,13 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration run \
 The command prints a JSON `DriveResult` (`status`, `stage`, `awaiting`). An
 `awaiting` result is a persisted wait: the process has exited.
 
+Independent review is refusal-by-default. To use the enforced R2-A reviewer,
+pass `--reviewer-sandbox` (plus `--reviewer-root`, and either
+`--review-model/--review-base-url` or a readable `--review-provider-profile`);
+otherwise the graph holds at `request_independent_review` with
+`capability_unenforced`. `scripts/live_review_fixture.py` is the reproducible
+host-side exercise of that path.
+
 ## Inspect / resume / cancel / export
 
 ```sh
@@ -141,16 +148,16 @@ claim is made; the pilot produces the first observed values.
 | --- | --- | --- |
 | T1 one effect owner | two concurrent child processes; exactly one request and one `admitted` event; loser refuses | `tests/test_orchestration_recovery.py::test_two_concurrent_admissions_have_one_effect_owner` |
 | T2 inspect/export provenance | real checkpoint + attempt + candidate/base + engine release + next action | `tests/test_orchestration_flow.py::test_happy_path_returns_a_proposal_with_full_provenance`, `tests/test_orchestration_cli.py::test_inspect_and_export_expose_provenance` |
-| T3 crash windows | process death before submit / after submit / after receipt / after checkpoint, plus after an acceptance receipt; durable effect directory inspected | `tests/test_orchestration_recovery.py::test_crash_*`, `::test_crash_after_checkpoint_does_not_repeat_confirmed_work`, `::test_crash_after_acceptance_receipt_does_not_rerun_the_gate` |
+| T3 crash windows | process death before submit / after submit / after receipt / after checkpoint, after an acceptance receipt, and after a review receipt (durable review result adopted, no resubmission) | `tests/test_orchestration_recovery.py::test_crash_*`, `::test_crash_after_checkpoint_does_not_repeat_confirmed_work`, `::test_crash_after_acceptance_receipt_does_not_rerun_the_gate`, `::test_crash_after_review_receipt_adopts_without_resubmitting` |
 | T4 stale/cancelled attempts | superseded attempt refused; cancellation idempotent; resume blocked | `tests/test_orchestration_recovery.py::test_superseded_attempt_cannot_resume_or_act`, `::test_cancellation_is_idempotent_and_blocks_resume` |
 | T5 evidence negatives | real engine verifier reasons for diagnostic, teardown, safety, candidate, log tamper, missing log, duplicate keys | `tests/test_orchestration_evidence.py` |
 | T6 independent review | implementer self-approval refused; inconclusive review holds; review bound to another candidate refused | `tests/test_orchestration_flow.py::test_implementer_cannot_approve_its_own_candidate`, `::test_review_bound_to_a_different_candidate_is_rejected`, `::test_inconclusive_review_holds_without_repair` |
 | T7 repair budget | three submissions, two repairs, restart does not reset | `tests/test_orchestration_flow.py::test_review_changes_cycle_through_bounded_repairs`, `::test_restart_cannot_reset_the_repair_budget` |
-| T8 installed identity | launcher/ready/deployment/policy hashes, engine fingerprint recomputation, installed verifier negative, and a full installed `factory run` acceptance on a disposable repo | `tests/test_orchestration_installed.py`, `scripts/langgraph_pilot_acceptance.py`, `evidence/installed-acceptance.json`, `evidence/g0-capture.json` |
+| T8 installed identity | launcher/ready/deployment/policy hashes, engine fingerprint recomputation, installed verifier negative, a full installed `factory run` acceptance on a disposable repo, and a graph run (real Hermes worker + attested reviewer) whose acceptance and verification go through the installed launcher | `tests/test_orchestration_installed.py`, `scripts/langgraph_pilot_acceptance.py`, `scripts/langgraph_hermes_acceptance.py`, `evidence/installed-acceptance.json`, `evidence/hermes-graph-run/run.json`, `evidence/g0-capture.json` |
 | T9 opt-in/rollback | admission disabled refuses before any effect; active graph drains; rollback keeps checkpoints readable | `tests/test_orchestration_installed.py` |
-| T10 read-only capability | **blocked**: no enforced boundary; live reviewer refuses with `capability_unenforced`; fake/offline adapters deny mutation | `tests/test_orchestration_hermes.py::test_live_reviewer_refuses_unenforced_readonly` |
+| T10 read-only capability | **PASS for reviewer tool effects, enforced by an executed attestation** (mounts, image, uid, network, capabilities, tool surface); refusal remains the default without `--reviewer-sandbox`; not a claim of whole-agent containment | `evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_orchestration_hermes.py::test_live_reviewer_refuses_unenforced_readonly`, `reviewer-sandbox.md` |
 | T11 mismatch holds | moved base, changed spec, changed graph version, unrecognized release | `tests/test_orchestration_recovery.py::test_moved_base_and_changed_spec_fail_closed`, `::test_unrecognized_release_and_graph_version_hold` |
-| T12 metrics | observed intervention/diagnosis measurements on one pilot run; explicit baseline gap | `tests/test_orchestration_cli.py::test_metrics_report_observed_values_without_a_baseline`, `evidence/pilot-run.json` |
+| T12 metrics | observed intervention/diagnosis measurements on two runs (fixture pilot and real-worker graph run); explicit baseline gap | `tests/test_orchestration_cli.py::test_metrics_report_observed_values_without_a_baseline`, `evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json` |
 
 ## Pilot observation (T8/T12)
 
@@ -171,18 +178,50 @@ The installed runner writes evidence into `<artifacts-root>/<factory-project>/`;
 `InstalledLauncherGate` discovers exactly one current project directory and
 reports `inconclusive` when the choice is ambiguous — it never guesses.
 
+The worker/reviewer adapters in that pilot are deterministic fixtures. The
+separate acceptance below uses the real adapters:
+
+```sh
+uv run --extra orchestration python scripts/langgraph_hermes_acceptance.py --run \
+  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-hermes-acceptance
+```
+
+It executes one `factory-card/v1` graph whose implementation step is a real
+`hermes -p factory-runner chat` child process (committing the candidate) and
+whose independent review runs in the attested R2-A container; acceptance and
+verification go through the installed `bin/factory`. The model behind both
+agents is a loopback scripted provider from the installed Hermes test fixtures,
+so transport, tools, git, container, attestation and gate are real while model
+text is deterministic. Result: `ready_for_authorized_completion`, candidate
+commit, approval reference, 0 repairs; receipts in `evidence/hermes-graph-run/`.
+
+A real-provider review is exercised separately and reproducibly:
+
+```sh
+.venv/bin/python scripts/live_review_fixture.py --run \
+  --provider-profile factory-runner \
+  --out docs/langgraph-hybrid/evidence/reviewer-sandbox \
+  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-live-review
+```
+
+The script builds a disposable candidate/evidence fixture and runs the
+attestation and the review in the same adapter instance, so the receipt and the
+transcript cannot drift; the attestation digest is recorded in the run summary.
+It requires Docker and the named profile's provider credential.
+
 ## Known gaps in this increment
 
-- **T10 live read-only review:** blocked, not passed. There is no OS-level
-  read-only boundary for same-UID Hermes profiles (`file` includes write tools;
-  `terminal`/`execute_code` can write). A live reviewer is refused; extension
-  proposal card `t_2abae28a`.
-- **T8 full production acceptance:** the installed acceptance was exercised on a
-  disposable repository only. Enrollment on a real card still needs an operator
-  decision and a current Hermes attempt.
-- **T12 baseline:** no historical measurements exist; the pilot contributes one
-  observed run (n=1) and reports the gap rather than an improvement claim.
-- **Live worker completions:** the live worker contract requires the worker to
-  write `worker-result.json` with its attempt identity and candidate. A worker
-  that exits 0 without it is reported `ambiguous` and the graph holds.
+- **T10 scope:** enforced for the reviewer's tool effects, not whole-agent
+  containment. The host launcher/profile, provider egress, in-container
+  `execve`, the image and the Docker daemon remain trusted; see
+  `reviewer-sandbox.md` for the full residual list.
+- **T8 production acceptance:** the installed acceptance and the real-worker
+  graph both ran on disposable repositories. Enrollment on a real card still
+  needs an operator decision and a current Hermes attempt.
+- **T12 baseline:** no historical measurements exist; the runs contribute two
+  observed samples (n=1 fixture pilot, n=1 real-worker graph) and report the gap
+  rather than an improvement claim.
+- **Live worker completions:** the live worker contract derives the candidate
+  from the workspace HEAD when no `worker-result.json` is written; a dirty
+  workspace or no new commit is `failed`, never success.
 - No production admission, release activation or default change is included.

@@ -48,6 +48,7 @@ from factory_orchestration.adapters.hermes import (  # noqa: E402
     HermesBoard,
     HermesWorker,
 )
+from factory_orchestration.adapters.installed import discover  # noqa: E402
 from factory_orchestration.adapters.reviewer_sandbox import _load_fake_provider  # noqa: E402
 from factory_orchestration.cli import _reviewer, build_parser  # noqa: E402
 from factory_orchestration.graph import Deps, thread_id  # noqa: E402
@@ -306,6 +307,7 @@ def main() -> int:
     repo_info = build_repo(run_root)
     base = repo_info["base"]
     workspace = repo_info["worktree"]
+    release = discover(LAUNCHER.parent.parent)
 
     spec = run_root / "card-spec.md"
     spec.write_text("# Acceptance card\n\nCommit one bounded candidate marker.\n")
@@ -346,9 +348,7 @@ def main() -> int:
         "revision": git(ROOT, "rev-parse", "HEAD"),
         "card": CARD,
         "base": base,
-        "release": (LAUNCHER.parent.parent / "RELEASE_MANIFEST.txt").read_text()
-        if (LAUNCHER.parent.parent / "RELEASE_MANIFEST.txt").is_file()
-        else "",
+        "release": release.as_dict(),
         "board_projection": "read-only CLI fixture; no Kanban write",
     }
 
@@ -425,9 +425,9 @@ def main() -> int:
                 str(artifacts_root),
             ),
             acceptance_artifacts=str(artifacts_root),
-            engine_release_reference="installed:" + str(LAUNCHER),
-            engine_fingerprint="sha256:" + "a" * 64,
-            host_policy_digest="sha256:" + "b" * 64,
+            engine_release_reference=release.reference,
+            engine_fingerprint=release.fingerprint,
+            host_policy_digest=release.host_policy_sha256,
             max_repairs=0,
         )
         started = time.time()

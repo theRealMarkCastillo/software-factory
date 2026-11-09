@@ -38,9 +38,12 @@ runs = [{id: 356, profile: "factory-runner", status: "running", outcome: null}]
 
 **Finding:** `show --json` deliberately does not expose `claim_lock` or
 `current_run_id`, so those fields cannot be used as the read-only ownership
-check. The adapter therefore validates the env-granted `(task_id, run_id)`
-against the set of `running` run ids, and uses the run-scoped heartbeat as the
-authoritative liveness check. `claim_lock` is carried only for diagnostics.
+check. Ownership is validated from the dispatcher grant itself
+(`HERMES_KANBAN_TASK` + `HERMES_KANBAN_RUN_ID` + `HERMES_KANBAN_CLAIM_LOCK`,
+held by this process) plus the board's live `running` run ids for the card. The
+run-scoped heartbeat is a **liveness** signal only; it authorizes nothing and a
+failed heartbeat never substitutes for missing ownership evidence.
+`claim_lock` is carried only for diagnostics.
 
 ## 2. Worker profile invocation with durable correlation
 
@@ -93,19 +96,21 @@ and this adapter does not use or emulate it.
 not re-spawned; duplicate-writer protection for the workspace is therefore
 provided by Hermes plus the orchestration coordinator lock (T1).
 
-## 5. Capabilities that are **not** available (blocked, not papered over)
+## 5. Capabilities: supported, conditional, and out of scope
 
 | Capability | Verdict | Evidence |
 | --- | --- | --- |
-| Live read-only review enforcement | **BLOCKED** | `hermes chat` exposes `file` (`write_file`, `patch`), `terminal` and `execute_code` tools; `toolsets.py:118`; there is no read-only toolset. The `safe` toolset only removes terminal (`toolsets.py:170`) and is not a capability boundary in the same UID. No sandbox is enabled. |
-| Full installed acceptance (`factory run`) | **BLOCKED for this increment** | Requires Docker and an authorized disposable project. Only the installed verifier (`bin/factory verify`) is exercised, read-only and offline. |
+| Read-only review of an independent reviewer's **tool effects** | **SUPPORTED with the Docker terminal backend** | `hermes chat` exposes `file` (`write_file`, `patch`), `terminal` and `execute_code`; there is no read-only toolset (`toolsets.py:118`). R2-A therefore runs the reviewer in a disposable, digest-pinned container with `:ro` candidate/evidence mounts, `--network=none`, non-root, read-only rootfs and no forwarded env, and refuses to review unless an executed attestation measures that surface. See `reviewer-sandbox.md` and `evidence/reviewer-sandbox/attestation.json`. |
+| Whole-agent containment | **NOT AVAILABLE, NOT CLAIMED** | The host launcher, its profile home and session DB run as the host user; `/evidence` content reaches the configured provider; `execve` inside the container is not denied (Hermes file tools are `docker exec`); the image and Docker daemon are trusted. |
+| Full installed acceptance (`factory run`) | **SUPPORTED on an authorized disposable project** | `evidence/installed-acceptance.json` and `evidence/hermes-graph-run/`: real `bin/factory run` + `bin/factory verify` (exit 0, reason `ok`) against a busybox-only disposable repo with no host ports or mounts. |
 | Graph admission of an already-claimed card from a *separate* process | **NOT SUPPORTED** | Claims are admitted through the profile owner's gateway (`kanban_worker_client`); the graph therefore executes **inside** the claiming worker and resumes only inside a current attempt. |
 
-The live reviewer adapter is implemented but refuses to run:
-`HermesReviewer.submit` raises `capability_unenforced` unless an
-OS-level attestor proves read-only. The default attestor
-(`NoReadonlyEnforcement`) always refuses, so no prompt-only "read-only" claim is
-made. T10 is reported as blocked, not passed.
+The live reviewer remains refusal-by-default: `HermesReviewer.submit` raises
+`capability_unenforced` unless an executed attestor proves the sandbox, and the
+CLI only constructs `SandboxedReadonlyAttestor` when the operator passes the
+explicit `--reviewer-sandbox` flag. No prompt-only "read-only" claim is made.
+T10 is therefore satisfied **for the reviewer's tool effects**, not as
+whole-agent containment.
 
 ## 6. Consequences for this implementation
 

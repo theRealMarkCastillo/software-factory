@@ -2,7 +2,7 @@
 
 Date: 2026-11-08
 Implementation revision under review:
-**`2971e86453807acefac5d42831a9936839b7e76d`**
+**`651b2ea890d7d818a1174beb5c1096025434df41`**
 Evidence commit: the commit that adds this file. Its parent is the
 implementation revision above; this record and the refreshed evidence are the
 only changes it adds.
@@ -13,6 +13,27 @@ Base: `f0d1545706fce719fc2c643ef47d2837b93e7411` (engine `main`, clean at start)
 This record reports commands actually run and their observed output. Fixture
 coverage is labelled as such; it is not presented as end-to-end production
 acceptance.
+
+## Delta in this revision (since `2971e864`)
+
+- `factory/policy.py` gains `container_image_digest`: the reviewer image pin is
+  resolved through the sanctioned Docker path with a validated reference
+  (bounded, no leading dash, no shell fragments), fixed argv, and a fail-closed
+  refusal on Docker error, malformed/unexpected JSON, or an image that has no
+  local `repo@sha256:` pin. `reviewer_sandbox.image_digest` now delegates to it
+  and maps a `PolicyViolation` to `capability_unenforced`.
+- New tests (`tests/test_policy.py`, `tests/test_orchestration_reviewer_sandbox.py`):
+  invalid references never reach Docker, the exact fixed argv, every
+  fail-closed branch, the delegation, and an AST guard that no module under
+  `factory_orchestration/` builds a `docker` argv. Against the parent revision
+  the guard fails at `reviewer_sandbox.py:228`; the policy tests fail because
+  the helper does not exist.
+- The sandbox was re-attested from a clean `git archive` of this revision
+  (`provenance.revision: 651b2ea`). The pinned image is unchanged
+  (`python@sha256:02108f5d…`), so the earlier graph-run and live-review
+  receipts remain bound to the same image and stay valid.
+- No other executable change: graph, adapters, admission, CLI, gates and
+  promotion boundaries are untouched by this delta.
 
 ## Environment
 
@@ -31,9 +52,9 @@ blocks the import and asserts the package has no reference to it.
 
 ```sh
 .venv/bin/python -m pytest -q tests/test_orchestration_*.py
-# 87 passed in 19.94s                      -> evidence/pytest-orchestration.txt
+# 90 passed in 19.36s                      -> evidence/pytest-orchestration.txt
 .venv/bin/python -m pytest -q
-# 774 passed, 2 skipped, 1 warning in 52.95s -> evidence/pytest-full.txt
+# 780 passed, 2 skipped, 1 warning in 53.16s -> evidence/pytest-full.txt
 .venv/bin/ruff check .
 # All checks passed!                      -> evidence/ruff-check.txt
 .venv/bin/ruff format --check .
@@ -78,7 +99,7 @@ Host-side acceptance (real Docker, disposable scratch only):
 | T7 repair budget | PASS | original + two repairs exhausts the budget; restart cannot reset it (`tests/test_orchestration_flow.py`) |
 | T8 installed identity | PASS | pinned launcher/ready/deployment/policy identity recomputed; installed verifier negative; full installed `factory run` + `verify` on a disposable repo; graph whose acceptance/verification used the installed launcher (`tests/test_orchestration_installed.py`, `evidence/installed-acceptance.json`, `evidence/hermes-graph-run/`) |
 | T9 opt-in / rollback | PASS | disabled admission refuses before effect; drain allowed; rollback keeps checkpoints readable and legacy cards operable (`tests/test_orchestration_installed.py`) |
-| T10 read-only capability | PASS (tool effects, enforced) | executed attestation: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest, non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox` (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`) |
+| T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox` (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
 | T11 mismatch holds | PASS | moved base, changed spec, changed graph/schema, changed engine/policy identity and unrecognized release produce holds; no silent migration (`tests/test_orchestration_recovery.py`) |
 | T12 metrics | PARTIAL | observed values only: fixture pilot 2 s / 10 transitions / 0 interventions / 0 repairs; real-worker graph 41 s / 11 transitions / 0 interventions / 0 repairs; historical baseline unavailable and reported as a gap (`evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json`) |
 

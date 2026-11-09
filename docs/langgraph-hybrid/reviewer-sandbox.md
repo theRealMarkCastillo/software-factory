@@ -26,10 +26,10 @@ inputs: `t_2abae28a` v2 (`ARCHITECTURE_1.md`, `DESIGN-VERDICT-v2.md`,
 
 ## Verified on this host
 
-Attestation on the frozen candidate (clean worktree at the implementation
+Attestation on the frozen candidate (clean `git archive` of the implementation
 revision) and the selected evidence tree (`docs/langgraph-hybrid/evidence/`),
 receipt committed at `docs/langgraph-hybrid/evidence/reviewer-sandbox/attestation.json`
-with explicit provenance (`revision: 2971e864…`, candidate/evidence paths and
+with explicit provenance (`revision: 651b2ea…`, candidate/evidence paths and
 digests):
 
 ```
@@ -47,7 +47,9 @@ Executed findings recorded in that receipt:
 - effective config: `terminal.backend=docker`, `container_persistent=false`,
   `docker_network=false`, `docker_forward_env=[]`,
   `docker_mount_cwd_to_workspace=false`; volumes are the two `:ro` trees plus the
-  `:ro` probe mount; image pinned by digest.
+  `:ro` probe mount; image pinned by digest, resolved through
+  `policy.container_image_digest` (a mutable tag is refused, and no module in
+  `factory_orchestration/` builds a `docker` argv itself — enforced by a test).
 - resolved surface measured from the provider request: exactly
   `{patch, read_file, search_files, write_file}`.
 - `write_file`/`patch` on the read-only mounts fail with `Read-only file system`
@@ -91,10 +93,12 @@ Any other path-like argument, any out-of-surface tool, or a missing terminal
 PYTHONPATH= .venv/bin/python -m pytest -q
 
 # executed attestation on this host (creates and removes its own container)
+# candidate is a clean extract: git archive <rev> | tar -x -C <candidate>
 PYTHONPATH= .venv/bin/python scripts/attest_reviewer_sandbox.py \
   --root /path/to/scratch/reviewer-sandbox \
   --candidate /path/to/candidate-worktree \
   --evidence /path/to/selected-evidence \
+  --revision "$(git rev-parse HEAD)" \
   --out docs/langgraph-hybrid/evidence/reviewer-sandbox/attestation.json
 
 # attestation + one real-provider review through the same adapter instance
@@ -110,8 +114,10 @@ PYTHONPATH= .venv/bin/python scripts/langgraph_hermes_acceptance.py --run \
 
 The offline tests that pin these behaviours are
 `tests/test_orchestration_reviewer_sandbox.py` (exact mount binding, mutated
-config refusal, attestation reuse refusal, ambiguous volume parser) and
-`tests/test_policy.py` (Docker helper validation, foreign-profile refusal).
+config refusal, attestation reuse refusal, ambiguous volume parser, image-pin
+delegation, and a guard that no orchestration module builds a `docker` argv) and
+`tests/test_policy.py` (Docker helper validation, image-reference and
+digest fail-closed branches, foreign-profile refusal).
 
 ## What this does and does not contain
 

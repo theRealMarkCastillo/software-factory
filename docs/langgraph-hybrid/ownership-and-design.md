@@ -97,9 +97,13 @@ retry.
   evidence digest. Changing any of them invalidates the approval. An
   implementer's own approval never releases acceptance. A chat string or bare
   boolean is not accepted as authority.
-- **Read-only capability:** enforced for offline adapters (mutation raises).
-  Live reviewer execution is **blocked** (`capability_unenforced`) because the
-  host has no OS-level read-only boundary; see `g0-capabilities.md`.
+- **Read-only capability:** enforced for offline adapters (mutation raises) and,
+  for a live reviewer's tool effects, by the explicit R2-A sandbox: a
+  disposable, digest-pinned container with `:ro` mounts, no network, non-root,
+  read-only rootfs and a preflight through the real tool stack. Review refuses
+  with `capability_unenforced` by default and whenever the executed attestation
+  fails or the sandbox differs from the attested one; see `reviewer-sandbox.md`.
+  This is tool-effect isolation, not whole-agent containment.
 
 ## Reason codes
 

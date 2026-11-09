@@ -26,13 +26,21 @@ inputs: `t_2abae28a` v2 (`ARCHITECTURE_1.md`, `DESIGN-VERDICT-v2.md`,
 
 ## Verified on this host
 
-Attestation on the frozen candidate and the selected evidence tree
-(`docs/langgraph-hybrid/evidence/`), receipt committed at
-`docs/langgraph-hybrid/evidence/reviewer-sandbox/attestation.json`:
+Attestation on the frozen candidate (clean worktree at the implementation
+revision) and the selected evidence tree (`docs/langgraph-hybrid/evidence/`),
+receipt committed at `docs/langgraph-hybrid/evidence/reviewer-sandbox/attestation.json`
+with explicit provenance (`revision: 2971e864…`, candidate/evidence paths and
+digests):
 
 ```
 enforced: True  reason: readonly_sandbox_attested
 ```
+
+The review-run attestation is kept separately at
+`evidence/reviewer-sandbox/live-review-attestation.json`; its recomputed digest
+is the `attestation_digest` recorded in `live-review-run.json` and in the
+durable review receipt, so the review uses exactly the sandbox that was
+measured for it.
 
 Executed findings recorded in that receipt:
 

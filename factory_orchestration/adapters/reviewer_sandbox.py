@@ -223,31 +223,19 @@ def sandbox_config_yaml(
 
 
 def image_digest(image: str) -> str:
-    """Resolve an image reference to a local ``repo@sha256:`` digest."""
+    """Resolve an image reference to a local ``repo@sha256:`` digest.
 
-    result = subprocess.run(
-        ["docker", "image", "inspect", image, "--format", "{{json .RepoDigests}}"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    if result.returncode != 0:
-        raise OrchestrationError(
-            "capability_unenforced",
-            f"docker image inspect failed for {image!r}: {result.stderr.strip()[:200]}",
-        )
+    Container work goes through :mod:`factory.policy` — the sanctioned Docker
+    path — and an invalid, failing or unpinnable reference fails closed as
+    ``capability_unenforced`` rather than falling back to a mutable tag.
+    """
+
+    from factory import policy
+
     try:
-        digests = json.loads(result.stdout or "[]")
-    except ValueError:
-        digests = []
-    for entry in digests or []:
-        if "@sha256:" in entry:
-            return entry
-    raise OrchestrationError(
-        "capability_unenforced",
-        f"image {image!r} has no local repo digest to pin; refusing to review",
-    )
+        return policy.container_image_digest(image)
+    except policy.PolicyViolation as exc:
+        raise OrchestrationError("capability_unenforced", str(exc)) from exc
 
 
 def prepare_sandbox(

@@ -882,6 +882,14 @@ def teardown(
 
 _CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _LABEL_RE = re.compile(r"^[A-Za-z0-9_.:=/-]{1,128}$")
+#: A reference the factory may hand to ``docker image inspect``. Bounded,
+#: no whitespace/shell metacharacters, and it cannot start with ``-`` (so it
+#: can never be parsed as a Docker option).
+_IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,253}$")
+#: The only accepted resolution of that reference: a content-addressed digest.
+_IMAGE_DIGEST_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,253}@sha256:[0-9a-f]{64}$"
+)
 
 #: Fixed probes used to attest the sandbox from inside. The argv is code-owned;
 #: no caller-supplied program or script text is accepted.
@@ -948,6 +956,43 @@ def _label_filters(labels: dict[str, str]) -> list[str]:
             raise PolicyViolation(f"invalid docker label filter {spec!r}")
         args += ["--filter", f"label={spec}"]
     return args
+
+
+def container_image_digest(image: str) -> str:
+    """Resolve *image* to the local ``repo@sha256:`` digest that pins it.
+
+    Read-only and fixed-argv: the only Docker call is ``docker image inspect``
+    with a validated reference and a constant ``--format``. Fails closed on an
+    invalid reference (including anything that could be read as an option or a
+    shell fragment), a Docker error, malformed JSON, or an image with no local
+    repo digest — a mutable tag alone is not a pin.
+    """
+
+    ref = str(image).strip()
+    if not _IMAGE_REF_RE.match(ref):
+        raise PolicyViolation(f"invalid docker image reference {ref!r}")
+    cmd = ["docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}"]
+    assert_safe_command(" ".join(cmd))
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=60, check=False
+    )
+    if result.returncode != 0:
+        raise PolicyViolation(
+            f"docker image inspect failed ({result.returncode}): "
+            f"{result.stderr.strip()[:200]}"
+        )
+    try:
+        digests = json.loads(result.stdout or "[]")
+    except ValueError as exc:
+        raise PolicyViolation("docker image inspect did not return JSON") from exc
+    if not isinstance(digests, list):
+        raise PolicyViolation("docker image inspect returned an unexpected JSON shape")
+    for entry in digests:
+        if isinstance(entry, str) and _IMAGE_DIGEST_RE.match(entry):
+            return entry
+    raise PolicyViolation(
+        f"image {ref!r} has no local repo digest to pin; refusing to use it"
+    )
 
 
 def find_containers(labels: dict[str, str]) -> list[str]:

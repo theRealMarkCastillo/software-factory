@@ -7,6 +7,7 @@ evidence. Everything else here is deterministic and offline.
 
 from __future__ import annotations
 
+import ast
 import json
 import subprocess
 from pathlib import Path
@@ -420,6 +421,73 @@ def test_audit_ignores_a_verdict_with_an_unknown_outcome(tmp_path):
         [{"type": "result", "text": '{"outcome":"looks_good","comment":"nope"}'}],
     )
     assert audit_review_transcript(transcript)["verdict"] is None
+
+
+def test_image_digest_delegates_to_policy_and_fails_closed(monkeypatch):
+    """Image pinning is a sanctioned policy call, never a raw Docker call."""
+
+    from factory import policy
+
+    pinned = "python@sha256:" + "c" * 64
+    monkeypatch.setattr(policy, "container_image_digest", lambda image: pinned)
+    assert rs.image_digest("python:3.12-slim") == pinned
+
+    def refuse(image):
+        raise policy.PolicyViolation(f"no digest for {image!r}")
+
+    monkeypatch.setattr(policy, "container_image_digest", refuse)
+    with pytest.raises(OrchestrationError) as excinfo:
+        rs.image_digest("python:3.12-slim")
+    assert excinfo.value.reason == "capability_unenforced"
+    assert "no digest" in excinfo.value.detail
+
+
+def test_image_digest_reports_a_policy_refusal_without_calling_docker(monkeypatch):
+    """An invalid reference is refused by policy before any subprocess runs."""
+
+    from factory import policy
+
+    calls = []
+    monkeypatch.setattr(
+        policy.subprocess, "run", lambda cmd, **kwargs: calls.append(list(cmd))
+    )
+    with pytest.raises(OrchestrationError) as excinfo:
+        rs.image_digest("-rm")
+    assert excinfo.value.reason == "capability_unenforced"
+    assert calls == []
+
+
+def test_only_factory_policy_reaches_docker():
+    """AGENTS.md: keep Docker calls in ``factory/policy.py``.
+
+    The orchestration package may *name* the Docker backend in generated
+    configuration, but no module may build a ``docker`` argv of its own — the
+    R2-A image pin used to call ``docker image inspect`` directly.
+    """
+
+    root = Path(__file__).resolve().parents[1] / "factory_orchestration"
+    offenders = []
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            func = ast.unparse(node.func)
+            if not func.endswith(
+                ("subprocess.run", "subprocess.Popen", "subprocess.check_output")
+            ):
+                continue
+            first = node.args[0]
+            if not isinstance(first, (ast.List, ast.Tuple)) or not first.elts:
+                continue
+            head = first.elts[0]
+            if (
+                isinstance(head, ast.Constant)
+                and isinstance(head.value, str)
+                and head.value.split()[0] in {"docker", "docker-compose"}
+            ):
+                offenders.append(f"{path.relative_to(root.parent)}:{node.lineno}")
+    assert offenders == [], offenders
 
 
 def test_live_attestation_is_not_reachable_from_the_offline_suite(tmp_path):

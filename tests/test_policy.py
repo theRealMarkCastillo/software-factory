@@ -589,3 +589,84 @@ def test_remove_own_container_refuses_mismatches_and_removes_only_its_own(monkey
         is True
     )
     assert calls[-1] == ["docker", "rm", "-f", CID]
+
+
+# ---------------------------------------------------------------------------
+# container_image_digest: the read-only image pin used by the reviewer sandbox
+# ---------------------------------------------------------------------------
+
+PINNED = "python@sha256:" + "b" * 64
+
+
+def _fake_image_inspect(monkeypatch, *, stdout="[]", exit_code=0, stderr=""):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, exit_code, stdout, stderr)
+
+    monkeypatch.setattr(policy_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def test_container_image_digest_rejects_invalid_references_before_docker(monkeypatch):
+    calls = _fake_image_inspect(monkeypatch, stdout=json.dumps([PINNED]))
+    for bad in (
+        "",
+        "   ",
+        "-rm",
+        "--format",
+        "python; rm -rf /",
+        "python 3.12",
+        "python\nlatest",
+        "$(id)",
+        "a" * 300,
+    ):
+        with pytest.raises(PolicyViolation):
+            policy_mod.container_image_digest(bad)
+    assert calls == []
+
+
+def test_container_image_digest_uses_fixed_argv_and_returns_the_digest(monkeypatch):
+    calls = _fake_image_inspect(monkeypatch, stdout=json.dumps([PINNED]))
+    assert policy_mod.container_image_digest("python:3.12-slim") == PINNED
+    assert calls == [
+        [
+            "docker",
+            "image",
+            "inspect",
+            "python:3.12-slim",
+            "--format",
+            "{{json .RepoDigests}}",
+        ]
+    ]
+
+
+def test_container_image_digest_fails_closed(monkeypatch):
+    # Docker refused.
+    _fake_image_inspect(monkeypatch, exit_code=1, stderr="no such image")
+    with pytest.raises(PolicyViolation):
+        policy_mod.container_image_digest("python:3.12-slim")
+
+    # Malformed JSON.
+    _fake_image_inspect(monkeypatch, stdout="{not json")
+    with pytest.raises(PolicyViolation):
+        policy_mod.container_image_digest("python:3.12-slim")
+
+    # Unexpected JSON shape.
+    _fake_image_inspect(monkeypatch, stdout=json.dumps({"RepoDigests": [PINNED]}))
+    with pytest.raises(PolicyViolation):
+        policy_mod.container_image_digest("python:3.12-slim")
+
+    # A mutable tag is not a pin: no digest, only a tag-shaped entry, or a
+    # truncated/uppercase digest all refuse rather than returning a tag.
+    for payload in (
+        [],
+        ["python:3.12-slim"],
+        ["python@sha256:deadbeef"],
+        ["python@sha256:" + "B" * 64],
+        [None],
+    ):
+        _fake_image_inspect(monkeypatch, stdout=json.dumps(payload))
+        with pytest.raises(PolicyViolation):
+            policy_mod.container_image_digest("python:3.12-slim")

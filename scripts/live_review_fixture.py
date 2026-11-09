@@ -280,7 +280,7 @@ def run_review(args, fixture: dict) -> dict:
     for source, name in (
         (transcript, "live-review-fixture.jsonl"),
         (result_path, "live-review-fixture-result.json"),
-        (attestation_path, "attestation.json"),
+        (attestation_path, "live-review-attestation.json"),
         (request_path, "live-review-fixture-request.json"),
     ):
         shutil.copyfile(source, out / name)

@@ -8,11 +8,13 @@ evidence. Everything else here is deterministic and offline.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 from factory_orch_fixtures import CARD
 
+from factory_orchestration.adapters import reviewer_sandbox as rs
 from factory_orchestration.adapters.hermes import (
     EXPECTED_REVIEW_TOOLS,
     HermesReviewer,
@@ -28,8 +30,10 @@ from factory_orchestration.adapters.reviewer_sandbox import (
     SandboxedReadonlyAttestor,
     SandboxSpec,
     _assert_owned_root,
+    expected_volumes,
     prepare_sandbox,
     sandbox_config_yaml,
+    volume_map,
 )
 from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.state import Attempt
@@ -133,6 +137,157 @@ def test_provider_credentials_are_written_to_the_profile_env_not_the_child_env(
     assert "DEEPSEEK_API_KEY=placeholder-for-test" in env_file.read_text()
     env = child_environment(home=spec.home, base={})
     assert "DEEPSEEK_API_KEY" not in env
+
+
+def _mock_effective_config(monkeypatch, spec, *, volumes=None, image=None, extra=None):
+    values = {
+        "terminal.backend": "docker",
+        "terminal.container_persistent": False,
+        "terminal.docker_network": False,
+        "terminal.docker_forward_env": [],
+        "terminal.docker_mount_cwd_to_workspace": False,
+    }
+
+    def fake_run(argv, *, env, timeout, cwd=None):
+        key = argv[argv.index("config") + 2]
+        return subprocess.CompletedProcess(argv, 0, json.dumps(values[key]), "")
+
+    mounts = volumes or [
+        f"{source}:{destination}:{mode}"
+        for destination, (source, mode) in expected_volumes(spec).items()
+    ]
+    payloads = {
+        "terminal.docker_volumes": mounts,
+        "terminal.docker_extra_args": extra or ["--read-only", "--user", "10001:10001"],
+        "terminal.docker_image": image or spec.image,
+    }
+    monkeypatch.setattr(rs, "_run", fake_run)
+    monkeypatch.setattr(rs, "_config_json", lambda exe, key, env: payloads[key])
+    return {
+        "values": values,
+        "volumes": mounts,
+        "extra_args": payloads["terminal.docker_extra_args"],
+        "image": payloads["terminal.docker_image"],
+    }
+
+
+def test_volume_map_refuses_ambiguous_entries():
+    assert volume_map(["/a:/evidence/candidate:ro"]) == {
+        "/evidence/candidate": ("/a", "ro")
+    }
+    for bad in (
+        ["/a:/evidence/candidate"],
+        ["/a:/evidence/candidate:ro:extra"],
+        ["/a:/evidence/candidate:ro", "/b:/evidence/candidate:ro"],
+        "not-a-list",
+    ):
+        with pytest.raises(OrchestrationError):
+            volume_map(bad)
+
+
+def test_effective_config_binds_the_exact_mount_sources(tmp_path, monkeypatch):
+    spec = _spec(tmp_path)
+    attestor = SandboxedReadonlyAttestor(root=spec.root, image=IMAGE)
+    observed = _mock_effective_config(monkeypatch, spec)
+    assert attestor._read_effective_config(spec, {}) == observed
+
+    # Path substitution between attestation and use: the destination and the
+    # read-only flag are unchanged, only the host source moves.
+    substituted = [
+        f"{str(tmp_path / 'elsewhere')}:{CANDIDATE_MOUNT}:ro",
+        f"{str(spec.evidence.absolute())}:{EVIDENCE_MOUNT}:ro",
+        f"{str((spec.probe or tmp_path).absolute())}:{PROBE_MOUNT}:ro",
+    ]
+    _mock_effective_config(monkeypatch, spec, volumes=substituted)
+    with pytest.raises(OrchestrationError) as excinfo:
+        attestor._read_effective_config(spec, {})
+    assert "do not match the code-owned mounts" in excinfo.value.detail
+
+    # An extra mount is also a mismatch, even if it is read-only.
+    extra_mount = f"{str(tmp_path / 'extra')}:/evidence/extra:ro"
+    _mock_effective_config(
+        monkeypatch, spec, volumes=expected_volumes_text(spec) + [extra_mount]
+    )
+    with pytest.raises(OrchestrationError):
+        attestor._read_effective_config(spec, {})
+
+
+def expected_volumes_text(spec: SandboxSpec) -> list[str]:
+    return [
+        f"{source}:{destination}:{mode}"
+        for destination, (source, mode) in expected_volumes(spec).items()
+    ]
+
+
+def test_verify_terminal_refuses_an_unattested_or_changed_sandbox(
+    tmp_path, monkeypatch
+):
+    spec = _spec(tmp_path)
+    effective = _effective_config_for(spec)
+    attestor = SandboxedReadonlyAttestor(root=spec.root, image=IMAGE)
+
+    with pytest.raises(OrchestrationError) as excinfo:
+        attestor.verify_terminal(spec)
+    assert "no executed attestation" in excinfo.value.detail
+
+    attestor._attested = _attested_binding(spec, effective)
+    monkeypatch.setattr(
+        attestor, "_read_effective_config", lambda s, e: dict(effective)
+    )
+    attestor.verify_terminal(spec)  # unchanged: passes
+
+    # A tree changed after the executed preflight.
+    (spec.candidate / "late.txt").write_text("late change\n")
+    with pytest.raises(OrchestrationError) as excinfo:
+        attestor.verify_terminal(spec)
+    assert "candidate_digest changed" in excinfo.value.detail
+
+    # A different candidate path with the same digests is still refused.
+    (spec.candidate / "late.txt").unlink()
+    other = tmp_path / "candidate-copy"
+    other.mkdir()
+    (other / "README.md").write_text("# candidate\n")
+    moved = SandboxSpec(
+        name=spec.name,
+        root=spec.root,
+        candidate=other,
+        evidence=spec.evidence,
+        image=spec.image,
+        probe=spec.probe,
+    )
+    with pytest.raises(OrchestrationError) as excinfo:
+        attestor.verify_terminal(moved)
+    assert "not the attested" in excinfo.value.detail
+
+
+def _effective_config_for(spec: SandboxSpec) -> dict:
+    return {
+        "values": {
+            "terminal.backend": "docker",
+            "terminal.container_persistent": False,
+            "terminal.docker_network": False,
+            "terminal.docker_forward_env": [],
+            "terminal.docker_mount_cwd_to_workspace": False,
+        },
+        "volumes": expected_volumes_text(spec),
+        "extra_args": ["--read-only", "--user", "10001:10001"],
+        "image": spec.image,
+    }
+
+
+def _attested_binding(spec: SandboxSpec, effective: dict) -> dict:
+    return {
+        "candidate": str(Path(spec.candidate).absolute()),
+        "evidence": str(Path(spec.evidence).absolute()),
+        "probe": str(Path(spec.probe).absolute()) if spec.probe else "",
+        "candidate_digest": spec.candidate_digest,
+        "evidence_digest": spec.evidence_digest,
+        "image": spec.image,
+        "home": str(spec.home),
+        "uid": spec.uid,
+        "effective": effective,
+        "attested_at": 1,
+    }
 
 
 def test_attestor_without_a_provider_fails_closed(tmp_path, monkeypatch):
@@ -242,6 +397,20 @@ def test_audit_flags_a_path_outside_the_review_root(tmp_path):
     )
     audit = audit_review_transcript(transcript)
     assert any("outside review root" in item for item in audit["violations"])
+
+
+def test_audit_allows_container_root_only_for_search_files(tmp_path):
+    transcript = tmp_path / "stream.jsonl"
+    _write_transcript(
+        transcript,
+        [
+            {"type": "tool_use", "name": "search_files", "input": {"path": "/"}},
+            {"type": "tool_use", "name": "read_file", "input": {"path": "/"}},
+            {"type": "result", "text": '{"outcome":"approve"}'},
+        ],
+    )
+    violations = audit_review_transcript(transcript)["violations"]
+    assert violations == ["path outside review root: /"]
 
 
 def test_audit_ignores_a_verdict_with_an_unknown_outcome(tmp_path):

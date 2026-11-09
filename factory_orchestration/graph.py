@@ -222,6 +222,24 @@ def _review_from_payload(payload: Any, attempt: Attempt) -> ReviewResult:
     review = payload.get("review")
     if not isinstance(review, dict):
         raise OrchestrationError("protocol_error", "resume payload has no review")
+    required = (
+        "operation_key",
+        "reviewer",
+        "outcome",
+        "candidate_sha",
+        "base_sha",
+        "spec_digest",
+        "evidence_digest",
+        "graph_version",
+    )
+    missing = [name for name in required if not review.get(name)]
+    if missing:
+        # A compact receipt ({outcome, comment}) cannot be bound to a candidate.
+        # Hold; never crash the node and never adopt an unbound verdict.
+        raise OrchestrationError(
+            "protocol_error",
+            "review receipt lacks binding fields: " + ", ".join(sorted(missing)),
+        )
     return ReviewResult(
         operation_key=review["operation_key"],
         attempt=attempt,
@@ -708,6 +726,10 @@ def build_graph(deps: Deps, checkpointer=None):
                 operations[key].update({"state": "submitted"})
                 return _advance(state, "await_review", operations=operations)
             review = _review_from_payload({"review": stored}, _attempt(state))
+            if review.operation_key != key:
+                raise OrchestrationError(
+                    "protocol_error", "stored review key does not match the operation"
+                )
             return _apply_review(state, key, review, {"operations": operations})
         deps.store.mark_operation(key, "submitted")
         handle, inline = deps.reviewer.submit(

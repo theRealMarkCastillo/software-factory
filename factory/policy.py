@@ -989,14 +989,20 @@ def inspect_container(container_id: str) -> dict:
     return payload[0]
 
 
-def exec_container_probe(container_id: str, probe: str, *, timeout: int = 30) -> dict:
-    """Run one fixed, code-owned probe inside a reviewer container.
+def exec_container_probe(
+    container_id: str, probe: str, *, expected_profile: str, timeout: int = 30
+) -> dict:
+    """Run one fixed, code-owned probe inside the caller's own reviewer container.
 
-    Refuses anything but an id in :data:`CONTAINER_PROBES`; the container must be
-    labeled ``hermes-agent=1`` so an arbitrary host container cannot be used.
+    Refuses anything but an id in :data:`CONTAINER_PROBES`. The container must
+    carry both the ``hermes-agent=1`` label and the exact reviewer profile label;
+    the profile is required so a probe cannot be run inside a live worker's
+    container that happens to be Hermes-labelled.
     """
 
     cid = _assert_container_id(container_id)
+    if not _LABEL_RE.match(str(expected_profile)):
+        raise PolicyViolation(f"invalid expected profile label {expected_profile!r}")
     argv = CONTAINER_PROBES.get(probe)
     if argv is None:
         raise PolicyViolation(f"unknown sandbox probe {probe!r}")
@@ -1004,6 +1010,11 @@ def exec_container_probe(container_id: str, probe: str, *, timeout: int = 30) ->
     if labels.get("hermes-agent") != "1":
         raise PolicyViolation(
             f"container {cid} is not a Hermes sandbox (missing hermes-agent=1 label)"
+        )
+    if labels.get("hermes-profile") != expected_profile:
+        raise PolicyViolation(
+            f"container {cid} belongs to profile {labels.get('hermes-profile')!r}, "
+            f"not {expected_profile!r}"
         )
     cmd = ["docker", "exec", cid, *argv]
     assert_safe_command(" ".join(cmd))

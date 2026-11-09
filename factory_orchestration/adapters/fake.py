@@ -299,6 +299,7 @@ class FakeReviewer:
     outcome: str = "approve"
     candidate_override: str | None = None
     crash: CrashPlan | None = None
+    compact_receipt: bool = False
     submissions: list[str] = field(default_factory=list)
 
     def _receipt_path(self, key: str) -> Path:
@@ -336,7 +337,12 @@ class FakeReviewer:
             graph_version="factory-card/v1",
             comment="fake review",
         )
-        _write_json(self._receipt_path(operation_key), _review_payload(result))
+        _write_json(
+            self._receipt_path(operation_key),
+            {"outcome": result.outcome, "comment": result.comment}
+            if self.compact_receipt
+            else _review_payload(result),
+        )
         if self.crash:
             self.crash.maybe("after_receipt", "request_independent_review")
         return handle, result

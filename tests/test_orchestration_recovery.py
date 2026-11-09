@@ -162,6 +162,58 @@ def test_crash_after_checkpoint_does_not_repeat_confirmed_work(tmp_path):
     assert request_count(seeded["worker"]) == 1
 
 
+def test_crash_after_review_receipt_adopts_without_resubmitting(tmp_path):
+    seeded = seed(tmp_path)
+    crashed = _run(
+        _config(
+            seeded,
+            tmp_path,
+            review_crash_phase="after_receipt",
+            marker_dir=str(tmp_path),
+        )
+    )
+    assert crashed.returncode == 97, crashed.stderr
+    receipts = list((seeded["worker"].root / "review-receipts").glob("*.json"))
+    assert len(receipts) == 1
+    stored = json.loads(receipts[0].read_text())
+    # The durable receipt carries the binding fields a restart must validate.
+    assert stored["candidate_sha"] == seeded["candidate"]
+    assert stored["operation_key"]
+
+    restart = _run(_config(seeded, tmp_path))
+    assert restart.returncode == 0, restart.stderr
+    assert (
+        _child_result(tmp_path)["result"]["status"] == "ready_for_authorized_completion"
+    )
+    assert len(list((seeded["worker"].root / "review-receipts").glob("*.json"))) == 1
+    assert request_count(seeded["worker"]) == 1
+
+
+def test_compact_review_receipt_holds_instead_of_crashing(tmp_path):
+    seeded = seed(tmp_path)
+    crashed = _run(
+        _config(
+            seeded,
+            tmp_path,
+            review_crash_phase="after_receipt",
+            compact_review_receipt=True,
+        )
+    )
+    assert crashed.returncode == 97, crashed.stderr
+
+    # A receipt that cannot be bound (the shape the live adapter used to write)
+    # must hold as protocol_error, never raise KeyError out of the node.
+    restart = _run(_config(seeded, tmp_path, compact_review_receipt=True))
+    assert restart.returncode == 0, restart.stderr
+    result = _child_result(tmp_path)["result"]
+    assert result["status"] == "held"
+    events = seeded["deps"].store.events("software-factory:" + CARD)
+    errors = [event for event in events if event["kind"] == "stage_error"]
+    assert errors and errors[-1]["detail"]["reason"] == "protocol_error"
+    assert "binding fields" in errors[-1]["detail"]["detail"]
+    assert len(list((seeded["worker"].root / "review-receipts").glob("*.json"))) == 1
+
+
 def test_crash_after_acceptance_receipt_does_not_rerun_the_gate(tmp_path):
     seeded = seed(tmp_path)
     crashed = _run(

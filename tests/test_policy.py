@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -457,3 +458,134 @@ def test_compose_file_relative_volume_inside_repo_accepted(home_checkout):
     (home_checkout / "data").mkdir()
     cfg = {"services": {"app": {"volumes": ["./data:/app"]}}}
     assert_safe_compose_file(cfg, repo_root=home_checkout)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# reviewer-container helpers (the only sanctioned Docker paths for R2-A)
+# ---------------------------------------------------------------------------
+
+CID = "a" * 64
+
+
+def _fake_docker(monkeypatch, *, labels, inspect_exit=0, run_stdout="", run_exit=0):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        if cmd[:2] == ["docker", "inspect"]:
+            if inspect_exit:
+                return subprocess.CompletedProcess(cmd, inspect_exit, "", "boom")
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                json.dumps([{"Id": CID, "Config": {"Labels": labels}}]),
+                "",
+            )
+        return subprocess.CompletedProcess(cmd, run_exit, run_stdout, "err")
+
+    monkeypatch.setattr(policy_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def test_find_containers_requires_a_label_and_validates_it(monkeypatch):
+    with pytest.raises(PolicyViolation):
+        policy_mod.find_containers({})
+    with pytest.raises(PolicyViolation):
+        policy_mod.find_containers({"hermes-agent": "1; rm -rf /"})
+
+    calls = _fake_docker(monkeypatch, labels={}, run_stdout=f"{CID}\n")
+    ids = policy_mod.find_containers(
+        {"hermes-agent": "1", "hermes-profile": "factory-reviewer"}
+    )
+    assert ids == [CID]
+    assert calls[0][:4] == ["docker", "ps", "-a", "--quiet"]
+    assert "label=hermes-agent=1" in calls[0]
+    assert "label=hermes-profile=factory-reviewer" in calls[0]
+
+
+def test_inspect_container_validates_the_id_and_shape(monkeypatch):
+    _fake_docker(monkeypatch, labels={})
+    with pytest.raises(PolicyViolation):
+        policy_mod.inspect_container("not-a-container-id")
+    with pytest.raises(PolicyViolation):
+        policy_mod.inspect_container("a" * 8)  # too short to be a docker id
+
+    info = policy_mod.inspect_container(CID)
+    assert info["Id"] == CID
+
+    _fake_docker(monkeypatch, labels={}, inspect_exit=1)
+    with pytest.raises(PolicyViolation):
+        policy_mod.inspect_container(CID)
+
+
+def test_exec_container_probe_refuses_foreign_containers_and_profiles(monkeypatch):
+    # Hermes-labelled but another profile's container (e.g. a live worker).
+    calls = _fake_docker(
+        monkeypatch, labels={"hermes-agent": "1", "hermes-profile": "factory-runner"}
+    )
+    with pytest.raises(PolicyViolation) as excinfo:
+        policy_mod.exec_container_probe(
+            CID, "identity", expected_profile="factory-reviewer"
+        )
+    assert "factory-runner" in str(excinfo.value)
+    assert all(call[:2] == ["docker", "inspect"] for call in calls)
+
+    # Not a Hermes sandbox at all.
+    _fake_docker(monkeypatch, labels={"hermes-profile": "factory-reviewer"})
+    with pytest.raises(PolicyViolation):
+        policy_mod.exec_container_probe(
+            CID, "identity", expected_profile="factory-reviewer"
+        )
+
+    # Unknown probe names never reach Docker (no mock needed after this point).
+    with pytest.raises(PolicyViolation):
+        policy_mod.exec_container_probe(
+            CID, "rm -rf /", expected_profile="factory-reviewer"
+        )
+
+
+def test_exec_container_probe_runs_only_the_fixed_argv(monkeypatch):
+    calls = _fake_docker(
+        monkeypatch,
+        labels={"hermes-agent": "1", "hermes-profile": "factory-reviewer"},
+        run_stdout="uid=10001(reviewer) gid=10001\n",
+    )
+    result = policy_mod.exec_container_probe(
+        CID, "identity", expected_profile="factory-reviewer"
+    )
+    assert result["exit_code"] == 0
+    assert "uid=10001" in result["stdout"]
+    assert calls[-1] == [
+        "docker",
+        "exec",
+        CID,
+        *policy_mod.CONTAINER_PROBES["identity"],
+    ]
+
+
+def test_remove_own_container_refuses_mismatches_and_removes_only_its_own(monkeypatch):
+    with pytest.raises(PolicyViolation):
+        policy_mod.remove_own_container("nope", expected_profile="factory-reviewer")
+    with pytest.raises(PolicyViolation):
+        policy_mod.remove_own_container(CID, expected_profile="bad profile; rm")
+
+    _fake_docker(
+        monkeypatch, labels={"hermes-agent": "1", "hermes-profile": "factory-runner"}
+    )
+    with pytest.raises(PolicyViolation):
+        policy_mod.remove_own_container(CID, expected_profile="factory-reviewer")
+
+    _fake_docker(monkeypatch, labels={"hermes-profile": "factory-reviewer"})
+    with pytest.raises(PolicyViolation):
+        policy_mod.remove_own_container(CID, expected_profile="factory-reviewer")
+
+    calls = _fake_docker(
+        monkeypatch,
+        labels={"hermes-agent": "1", "hermes-profile": "factory-reviewer"},
+        run_exit=0,
+    )
+    assert (
+        policy_mod.remove_own_container(CID, expected_profile="factory-reviewer")
+        is True
+    )
+    assert calls[-1] == ["docker", "rm", "-f", CID]

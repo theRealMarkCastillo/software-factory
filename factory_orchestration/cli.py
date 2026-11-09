@@ -18,6 +18,8 @@ from .adapters.hermes import (
     HermesReviewer,
     HermesWorker,
     NoReadonlyEnforcement,
+    read_profile_model_config,
+    read_profile_provider_env,
 )
 from .adapters.installed import discover
 from .errors import OrchestrationError
@@ -27,6 +29,39 @@ from .state import Attempt, RunAssignment
 from .store import AdmissionPolicy, RunStore
 
 DEFAULT_LAUNCHER = Path("~/software-factory-ops/bin/factory")
+
+
+def _add_review_options(parser: argparse.ArgumentParser) -> None:
+    """Explicit opt-in for the enforced reviewer sandbox.
+
+    The default is the refusal attestor: a live review only runs when the
+    operator names the sandbox and the executed attestation proves it.
+    """
+
+    parser.add_argument(
+        "--reviewer-sandbox",
+        action="store_true",
+        help="run independent review in the attested Docker sandbox (default: refuse)",
+    )
+    parser.add_argument(
+        "--reviewer-root",
+        default="",
+        help="factory-owned disposable reviewer root (default: <state-dir>/reviewer-sandbox)",
+    )
+    parser.add_argument(
+        "--reviewer-image",
+        default="",
+        help="reviewer image tag; resolved to a repo digest before use",
+    )
+    parser.add_argument(
+        "--review-provider-profile",
+        default="factory-runner",
+        help="profile whose model endpoint/provider credentials the sandbox reuses",
+    )
+    parser.add_argument("--review-provider", default="")
+    parser.add_argument("--review-base-url", default="")
+    parser.add_argument("--review-model", default="")
+    parser.add_argument("--review-api-mode", default="")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--attempt-run-id", type=int, help="Hermes run id")
     run.add_argument("--attempt-profile", help="Hermes assignee profile")
     run.add_argument("--claim-lock", default="")
+    _add_review_options(run)
 
     for name, help_text in (
         ("inspect", "show stage, attempt, effects, evidence and next action"),
@@ -71,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     resume_command.add_argument("--attempt-run-id", type=int)
     resume_command.add_argument("--attempt-profile")
     resume_command.add_argument("--board", default=None)
+    _add_review_options(resume_command)
 
     admission = sub.add_parser("admission", help="inspect or change the opt-in policy")
     admission.add_argument("--enable", action="store_true")
@@ -116,9 +153,7 @@ def _deps(args, store: RunStore, state_dir: Path) -> Deps:
         board=HermesBoard(board=getattr(args, "board", None)),
         worker=HermesWorker(artifact_root=artifacts),
         gate=InstalledLauncherGate(Path(args.launcher), artifacts),
-        reviewer=HermesReviewer(
-            HermesWorker(artifact_root=artifacts), NoReadonlyEnforcement()
-        ),
+        reviewer=_reviewer(args, store, artifacts),
         state_dir=state_dir,
         artifact_dir=artifacts,
         release_identity=(
@@ -126,6 +161,41 @@ def _deps(args, store: RunStore, state_dir: Path) -> Deps:
             if release
             else (release_reference, fingerprint, "sha256:" + "0" * 64)
         ),
+    )
+
+
+def _reviewer(args, store: RunStore, artifacts: Path) -> HermesReviewer:
+    """Select the reviewer boundary. Refusal is the default, not a fallback."""
+
+    worker = HermesWorker(artifact_root=artifacts)
+    if not getattr(args, "reviewer_sandbox", False):
+        return HermesReviewer(worker, NoReadonlyEnforcement())
+
+    from .adapters.reviewer_sandbox import SandboxedReadonlyAttestor
+
+    mode = read_profile_model_config(args.review_provider_profile)
+    model = args.review_model or mode.get("default", "")
+    base_url = args.review_base_url or mode.get("base_url", "")
+    if not model or not base_url:
+        raise OrchestrationError(
+            "invalid_assignment",
+            "reviewer sandbox needs a model and endpoint "
+            "(--review-model/--review-base-url or a readable --review-provider-profile)",
+        )
+    root = (
+        Path(args.reviewer_root).expanduser().resolve()
+        if args.reviewer_root
+        else (Path(store.state_dir) / "reviewer-sandbox").resolve()
+    )
+    attestor = SandboxedReadonlyAttestor(root=root, image=args.reviewer_image or "")
+    return HermesReviewer(
+        worker,
+        attestor,
+        review_provider=args.review_provider or mode.get("provider", ""),
+        review_base_url=base_url,
+        review_model=model,
+        review_api_mode=args.review_api_mode or mode.get("api_mode", ""),
+        provider_env=read_profile_provider_env(args.review_provider_profile),
     )
 
 

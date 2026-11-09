@@ -417,10 +417,51 @@ class SandboxedReadonlyAttestor:
 
     # -- public ------------------------------------------------------------
     def verify_terminal(self, spec: SandboxSpec) -> None:
-        """Re-assert the terminal posture (cheap re-check after a config rewrite)."""
+        """Re-assert the terminal posture **and** the attested bindings.
 
+        Called after the model endpoint is rewritten for the real review. A
+        changed mount source, image, home or tree digest fails closed; the
+        preflight and the review must be the same sandbox over the same bytes.
+        """
+
+        attested = getattr(self, "_attested", None)
+        if not attested:
+            raise OrchestrationError(
+                "capability_unenforced",
+                "no executed attestation is bound to this attestor",
+            )
+        observed_paths = {
+            "candidate": str(Path(spec.candidate).absolute()),
+            "evidence": str(Path(spec.evidence).absolute()),
+            "probe": str(Path(spec.probe).absolute()) if spec.probe else "",
+            "image": spec.image,
+            "home": str(spec.home),
+        }
+        for name, value in observed_paths.items():
+            if value != attested[name]:
+                raise OrchestrationError(
+                    "capability_unenforced",
+                    f"review {name} {value!r} is not the attested {attested[name]!r}",
+                )
+        for name in ("candidate_digest", "evidence_digest"):
+            current = (
+                spec.candidate_digest
+                if name == "candidate_digest"
+                else spec.evidence_digest
+            )
+            if current != attested[name]:
+                raise OrchestrationError(
+                    "capability_unenforced",
+                    f"{name} changed between attestation and use "
+                    f"({attested[name]} -> {current})",
+                )
         env = _child_env(spec, api_key=None)
-        self._read_effective_config(spec, env)
+        observed = self._read_effective_config(spec, env)
+        if observed != attested["effective"]:
+            raise OrchestrationError(
+                "capability_unenforced",
+                "effective terminal configuration changed between attestation and use",
+            )
 
     def attest(
         self, *, reviewer: str, candidate: str, evidence: str
@@ -447,6 +488,18 @@ class SandboxedReadonlyAttestor:
                 receipt={"attempted_at": int(started)},
             )
         self._last_receipt = receipt
+        self._attested = {
+            "candidate": str(Path(spec.candidate).absolute()),
+            "evidence": str(Path(spec.evidence).absolute()),
+            "probe": str(Path(spec.probe).absolute()) if spec.probe else "",
+            "candidate_digest": receipt["sandbox"]["candidate_digest"],
+            "evidence_digest": receipt["sandbox"]["evidence_digest"],
+            "image": receipt["sandbox"]["image"],
+            "home": receipt["sandbox"]["home"],
+            "uid": receipt["sandbox"]["uid"],
+            "effective": receipt["findings"]["config"],
+            "attested_at": receipt["attested_at"],
+        }
         return AttestationReceipt(
             enforced=True,
             reason="readonly_sandbox_attested",
@@ -705,17 +758,15 @@ class SandboxedReadonlyAttestor:
         volumes = _config_json(self.executable, "terminal.docker_volumes", env)
         extra = _config_json(self.executable, "terminal.docker_extra_args", env)
         image = _config_json(self.executable, "terminal.docker_image", env)
-        if not isinstance(volumes, list) or len(volumes) < 2:
+        observed_mounts = volume_map(volumes)
+        expected_mounts = expected_volumes(spec)
+        if observed_mounts != expected_mounts:
             raise OrchestrationError(
-                "capability_unenforced", "configured docker_volumes are missing"
+                "capability_unenforced",
+                "configured docker_volumes do not match the code-owned mounts: "
+                f"observed {sorted(observed_mounts.items())!r}, "
+                f"expected {sorted(expected_mounts.items())!r}",
             )
-        for entry in volumes:
-            text = str(entry)
-            if not text.endswith(":ro"):
-                raise OrchestrationError(
-                    "capability_unenforced",
-                    f"configured volume is not read-only: {text}",
-                )
         if image != spec.image:
             raise OrchestrationError(
                 "capability_unenforced", f"effective image {image!r} is not the pin"
@@ -856,7 +907,9 @@ class SandboxedReadonlyAttestor:
         config = info.get("Config") or {}
         mounts = info.get("Mounts") or []
         probes = {
-            name: policy.exec_container_probe(container_id, name, timeout=60)
+            name: policy.exec_container_probe(
+                container_id, name, expected_profile=spec.name, timeout=60
+            )
             for name in (
                 "identity",
                 "capabilities",
@@ -890,6 +943,10 @@ class SandboxedReadonlyAttestor:
             "sandbox_home": str(spec.home),
             "candidate_mount": CANDIDATE_MOUNT,
             "evidence_mount": EVIDENCE_MOUNT,
+            "expected_mounts": {
+                destination: source
+                for destination, (source, _mode) in expected_volumes(spec).items()
+            },
         }
 
 
@@ -919,6 +976,50 @@ def _pick_probe_file(root: Path, names: tuple[str, ...]) -> str | None:
         if path.is_file() and not path.is_symlink() and path.stat().st_size < 200_000:
             return str(path.relative_to(root))
     return None
+
+
+def expected_volumes(spec: SandboxSpec) -> dict[str, tuple[str, str]]:
+    """The exact, code-owned mount map for one sandbox specification."""
+
+    expected = {
+        CANDIDATE_MOUNT: (str(Path(spec.candidate).absolute()), "ro"),
+        EVIDENCE_MOUNT: (str(Path(spec.evidence).absolute()), "ro"),
+    }
+    if spec.probe is not None:
+        expected[PROBE_MOUNT] = (str(Path(spec.probe).absolute()), "ro")
+    return expected
+
+
+def volume_map(volumes: Any) -> dict[str, tuple[str, str]]:
+    """Parse ``source:destination:mode`` strings; refuse anything ambiguous."""
+
+    if not isinstance(volumes, list):
+        raise OrchestrationError(
+            "capability_unenforced", "configured docker_volumes are missing"
+        )
+    mapping: dict[str, tuple[str, str]] = {}
+    for entry in volumes:
+        text = str(entry)
+        parts = text.rsplit(":", 2)
+        if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2]:
+            raise OrchestrationError(
+                "capability_unenforced", f"malformed docker volume: {text}"
+            )
+        source, destination, mode = parts
+        if not destination.startswith("/") or mode not in {"ro", "rw"}:
+            raise OrchestrationError(
+                "capability_unenforced", f"malformed docker volume: {text}"
+            )
+        if destination in mapping:
+            raise OrchestrationError(
+                "capability_unenforced", f"duplicate docker volume for {destination}"
+            )
+        mapping[destination] = (source, mode)
+    return mapping
+
+
+def _sha256_file(path: Path) -> str:
+    return _sha256_bytes(Path(path).read_bytes())
 
 
 def _config_json(executable: str, key: str, env: dict[str, str]) -> Any:
@@ -1037,16 +1138,23 @@ def _collect_failures(findings: dict) -> list[str]:
         failures.append("container is privileged")
     if container["pid_mode"] == "host":
         failures.append("container shares the host PID namespace")
+    expected_mounts = container.get("expected_mounts") or {}
+    sandbox_home = str(container["sandbox_home"]).rstrip("/")
     for mount in container["mounts"]:
         if mount["type"] != "bind":
             continue
         source = str(mount["source"] or "")
         destination = str(mount["destination"] or "")
-        if destination in {CANDIDATE_MOUNT, EVIDENCE_MOUNT, PROBE_MOUNT}:
+        if destination in expected_mounts:
+            if source != expected_mounts[destination]:
+                failures.append(
+                    f"{destination} is bound to {source}, "
+                    f"not the attested {expected_mounts[destination]}"
+                )
             if mount["rw"]:
                 failures.append(f"{destination} is mounted read-write")
             continue
-        if not source.startswith(str(container["sandbox_home"])):
+        if source != sandbox_home and not source.startswith(sandbox_home + os.sep):
             failures.append(f"unexpected host bind mount {source} -> {destination}")
         elif mount["rw"]:
             failures.append(

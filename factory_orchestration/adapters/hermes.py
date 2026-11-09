@@ -368,6 +368,7 @@ class HermesWorker:
 
     artifact_root: Path
     executable: str = "hermes"
+    home: str | Path | None = None
     max_turns: int = 200
     terminate_grace_s: float = 10.0
     extra_env: Mapping[str, str] = field(default_factory=dict)
@@ -409,7 +410,10 @@ class HermesWorker:
             request.workspace,
         ]
         env = child_environment(
-            tmpdir=directory, executable=self.executable, extra=self.extra_env
+            home=self.home,
+            tmpdir=directory,
+            executable=self.executable,
+            extra=self.extra_env,
         )
         (self._request_path(request.operation_key)).write_text(
             json.dumps(
@@ -454,6 +458,8 @@ class HermesWorker:
             "transcript": str(transcript),
             "result_path": str(directory / "worker-result.json"),
             "attempt": request.attempt.as_dict(),
+            "workspace": request.workspace,
+            "base_sha": request.base_sha,
         }
         return SubmitResult(
             handle=WorkerHandle(
@@ -487,12 +493,54 @@ class HermesWorker:
             return self._failed(handle.operation_key, "failed", detail)
         payload = self._read_result(handle.operation_key)
         if payload is None:
-            return self._failed(
-                handle.operation_key,
-                "ambiguous",
-                "worker exited 0 without a structured result file",
+            # No side-channel result file: derive the receipt from the durable
+            # workspace state (a commit the worker actually made), never from
+            # model prose. A zero-exit run with no new commit is not a success.
+            return self._receipt_from_workspace(
+                handle.operation_key, record, session_id=session_id
             )
         return self._receipt_from(handle.operation_key, payload, session_id=session_id)
+
+    def _git(self, workspace: str, *args: str) -> tuple[int, str]:
+        result = subprocess.run(
+            ["git", "-C", workspace, "--no-optional-locks", *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+        return result.returncode, result.stdout.strip()
+
+    def _receipt_from_workspace(
+        self, key: str, record: dict, *, session_id: str
+    ) -> WorkerReceipt:
+        from ..operations import _attempt_from
+
+        attempt = _attempt_from(record.get("attempt") or {})
+        workspace = str(record.get("workspace") or "")
+        base_sha = str(record.get("base_sha") or "")
+        if not workspace:
+            return self._failed(key, "ambiguous", "no workspace to inspect")
+        code, head = self._git(workspace, "rev-parse", "HEAD")
+        if code != 0 or len(head) != 40:
+            return self._failed(key, "ambiguous", "workspace has no readable HEAD")
+        status_code, dirty = self._git(workspace, "status", "--porcelain")
+        if status_code != 0:
+            return self._failed(key, "ambiguous", "workspace status is unreadable")
+        if dirty:
+            return self._failed(key, "failed", "worker left the workspace dirty")
+        if head == base_sha:
+            return self._failed(
+                key, "failed", "worker exited 0 without a candidate commit"
+            )
+        return WorkerReceipt(
+            operation_key=key,
+            attempt=attempt,
+            session_id=session_id,
+            outcome="completed",
+            candidate_sha=head,
+            detail="candidate read from the workspace HEAD",
+        )
 
     def _read_result(self, key: str) -> dict | None:
         record = self._records.get(key) or {}
@@ -671,6 +719,31 @@ def read_profile_provider_env(profile: str) -> dict[str, str]:
     return values
 
 
+def read_profile_model_config(profile: str) -> dict[str, str]:
+    """Read the model endpoint fields a disposable reviewer profile reuses.
+
+    Only the four endpoint fields are returned; the reviewer never inherits the
+    source profile's tools, home, sessions or environment. An unreadable or
+    malformed profile yields an empty mapping and the caller fails closed.
+    """
+
+    import yaml
+
+    path = Path.home() / ".hermes" / "profiles" / profile / "config.yaml"
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    model = data.get("model") if isinstance(data, dict) else None
+    if not isinstance(model, dict):
+        return {}
+    return {
+        name: str(model[name])
+        for name in ("provider", "base_url", "default", "api_mode")
+        if model.get(name)
+    }
+
+
 @dataclass
 class HermesReviewer:
     """Independent review executed in a disposable, sandboxed Hermes profile."""
@@ -816,6 +889,8 @@ class HermesReviewer:
             "base_sha": base_sha,
             "spec_digest": spec_digest,
             "evidence_digest": evidence_digest,
+            "attestation_digest": attestation.digest,
+            "graph_version": "factory-card/v1",
         }
         return (
             WorkerHandle(
@@ -874,37 +949,100 @@ class HermesReviewer:
         else:
             payload = audit["verdict"]
         payload["audit"] = audit
+        durable = self._durable_payload(key, payload)
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-        return self._result_from(key, payload)
+        result_path.write_text(json.dumps(durable, indent=2, sort_keys=True) + "\n")
+        return self._result_from(key, durable)
+
+    def _durable_payload(self, key: str, verdict: dict) -> dict:
+        """The complete receipt a restart needs to adopt, not just the verdict.
+
+        A compact ``{outcome, comment}`` file cannot be bound to a candidate, so
+        a restart would be unable to decide whether it may be adopted. Persist
+        the adapter-owned identity once, at write time.
+        """
+
+        record = self._records.get(key) or {}
+        return {
+            "schema": "factory-review-result/v1",
+            "operation_key": key,
+            "attempt": record.get("attempt") or {},
+            "reviewer": str(record.get("reviewer") or ""),
+            "outcome": str(verdict.get("outcome") or "inconclusive"),
+            "comment": str(verdict.get("comment") or "")[:4000],
+            "candidate_sha": str(record.get("candidate_sha") or ""),
+            "base_sha": str(record.get("base_sha") or ""),
+            "spec_digest": str(record.get("spec_digest") or ""),
+            "evidence_digest": str(record.get("evidence_digest") or ""),
+            "graph_version": "factory-card/v1",
+            "attestation_digest": str(record.get("attestation_digest") or ""),
+            "audit": verdict.get("audit") or {},
+        }
 
     def _result_from(self, key: str, payload: dict) -> ReviewResult:
         from ..operations import _attempt_from
 
         record = self._records.get(key) or {}
-        outcome = str(payload.get("outcome") or "inconclusive")
+        review = payload.get("review")
+        source: dict = review if isinstance(review, dict) else payload
+        attempt_payload = source.get("attempt") or record.get("attempt")
+        if not isinstance(attempt_payload, dict) or not attempt_payload:
+            raise OrchestrationError(
+                "protocol_error", "review receipt carries no attempt identity"
+            )
+        missing = [
+            name
+            for name in (
+                "operation_key",
+                "reviewer",
+                "candidate_sha",
+                "base_sha",
+                "spec_digest",
+                "evidence_digest",
+            )
+            if not source.get(name) and not record.get(name)
+        ]
+        if not source.get("graph_version") and not record.get("graph_version"):
+            missing.append("graph_version")
+        if missing:
+            raise OrchestrationError(
+                "protocol_error",
+                "review receipt lacks binding fields: " + ", ".join(sorted(missing)),
+            )
+
+        def field(name: str) -> str:
+            return str(source.get(name) or record.get(name) or "")
+
+        outcome = str(source.get("outcome") or "inconclusive")
         if outcome not in REVIEW_VERDICTS:
             outcome = "inconclusive"
         return ReviewResult(
-            operation_key=key,
-            attempt=_attempt_from(record["attempt"]),
-            reviewer=str(record["reviewer"]),
+            operation_key=field("operation_key") or key,
+            attempt=_attempt_from(attempt_payload),
+            reviewer=field("reviewer"),
             outcome=outcome,
-            candidate_sha=str(record["candidate_sha"]),
-            base_sha=str(record["base_sha"]),
-            spec_digest=str(record["spec_digest"]),
-            evidence_digest=str(record["evidence_digest"]),
-            graph_version="factory-card/v1",
-            comment=str(payload.get("comment") or "")[:4000],
+            candidate_sha=field("candidate_sha"),
+            base_sha=field("base_sha"),
+            spec_digest=field("spec_digest"),
+            evidence_digest=field("evidence_digest"),
+            graph_version=field("graph_version") or "factory-card/v1",
+            comment=str(source.get("comment") or "")[:4000],
         )
 
     def _inconclusive(self, key: str, detail: str) -> ReviewResult:
         record = self._records.get(key) or {}
         from ..operations import _attempt_from
 
+        attempt_payload = record.get("attempt")
+        if not isinstance(attempt_payload, dict) or not attempt_payload:
+            raise OrchestrationError(
+                "protocol_error",
+                "reviewer exited without a receipt and this evaluation holds no "
+                "attempt identity to bind an inconclusive result",
+            )
         return ReviewResult(
             operation_key=key,
-            attempt=_attempt_from(record["attempt"]),
+            attempt=_attempt_from(attempt_payload),
             reviewer=str(record.get("reviewer") or ""),
             outcome="inconclusive",
             candidate_sha=str(record.get("candidate_sha") or "0" * 40),
@@ -972,8 +1110,11 @@ def audit_review_transcript(path: str | Path) -> dict:
     """Post-hoc scope audit of a reviewer transcript.
 
     Every ``tool_use`` must be in the measured surface and every path-like
-    argument must stay under ``/evidence``. A violation makes the review
-    inconclusive (``review_scope_violation``); it is never retried as if green.
+    argument must stay under ``/evidence``. The single exception is a bare ``/``
+    handed to ``search_files``: it lists the container's own read-only root (the
+    candidate and evidence are under ``/evidence``), and any other tool asking
+    for ``/`` is a violation. A violation makes the review inconclusive
+    (``review_scope_violation``); it is never retried as if green.
     """
 
     violations: list[str] = []
@@ -994,14 +1135,21 @@ def audit_review_transcript(path: str | Path) -> dict:
                         violations.append(f"tool outside surface: {name}")
                     payload = event.get("input") or {}
                     if isinstance(payload, dict):
-                        for value in payload.values():
+                        for field, value in payload.items():
                             if not isinstance(value, str) or not value.startswith("/"):
                                 continue
-                            allowed = (
-                                value == "/"
-                                or value == REVIEW_ROOT
-                                or value.startswith(REVIEW_ROOT + "/")
+                            allowed = value == REVIEW_ROOT or value.startswith(
+                                REVIEW_ROOT + "/"
                             )
+                            if (
+                                not allowed
+                                and name == "search_files"
+                                and field == "path"
+                                and value == "/"
+                            ):
+                                # Container-local root listing only; the
+                                # container has no host mounts other than /evidence.
+                                allowed = True
                             if not allowed:
                                 violations.append(f"path outside review root: {value}")
                 elif event.get("type") == "result":

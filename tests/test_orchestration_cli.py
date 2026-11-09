@@ -7,8 +7,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from factory_orch_fixtures import seed
 
+from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.graph import thread_id
 from factory_orchestration.runner import drive, inspect_run
 
@@ -56,6 +58,57 @@ def test_inspect_and_export_expose_provenance(tmp_path):
     assert bundle["export_version"] == 1
     assert bundle["run"]["card_id"] == "t_abcd1234"
     assert bundle["approval"]["outcome"] == "approve"
+
+
+def test_reviewer_sandbox_is_explicit_and_refusal_is_the_default(tmp_path):
+    from factory_orchestration.adapters.hermes import NoReadonlyEnforcement
+    from factory_orchestration.adapters.reviewer_sandbox import (
+        SandboxedReadonlyAttestor,
+    )
+    from factory_orchestration.cli import _reviewer, build_parser
+    from factory_orchestration.store import RunStore
+
+    store = RunStore(tmp_path / "state")
+    artifacts = tmp_path / "artifacts"
+    base = ["--state-dir", str(store.state_dir), "run", "--assignment", "a.json"]
+
+    default = build_parser().parse_args(base)
+    reviewer = _reviewer(default, store, artifacts)
+    assert isinstance(reviewer.attestor, NoReadonlyEnforcement)
+
+    sandboxed = build_parser().parse_args(
+        base
+        + [
+            "--reviewer-sandbox",
+            "--review-model",
+            "review-model",
+            "--review-base-url",
+            "http://127.0.0.1:9/v1",
+            "--review-provider-profile",
+            "definitely-absent-profile",
+        ]
+    )
+    reviewer = _reviewer(sandboxed, store, artifacts)
+    assert isinstance(reviewer.attestor, SandboxedReadonlyAttestor)
+    assert reviewer.review_model == "review-model"
+    assert reviewer.review_base_url == "http://127.0.0.1:9/v1"
+    assert reviewer.provider_env == {}
+
+    missing_endpoint = build_parser().parse_args(
+        base
+        + [
+            "--reviewer-sandbox",
+            "--review-model",
+            "review-model",
+            "--review-base-url",
+            "",
+            "--review-provider-profile",
+            "definitely-absent-profile",
+        ]
+    )
+    with pytest.raises(OrchestrationError) as excinfo:
+        _reviewer(missing_endpoint, store, artifacts)
+    assert excinfo.value.reason == "invalid_assignment"
 
 
 def test_admission_is_opt_in_and_explicit(tmp_path):

@@ -83,7 +83,20 @@ def main() -> int:
         ),
     )
     reviewer = FakeReviewer(
-        root=Path(config["effects"]), outcome=config.get("reviewer_outcome", "approve")
+        root=Path(config["effects"]),
+        outcome=config.get("reviewer_outcome", "approve"),
+        compact_receipt=bool(config.get("compact_review_receipt")),
+        crash=(
+            CrashPlan(
+                phase=config["review_crash_phase"],
+                stage="request_independent_review",
+                marker_dir=Path(config["marker_dir"])
+                if config.get("marker_dir")
+                else None,
+            )
+            if config.get("review_crash_phase")
+            else None
+        ),
     )
     deps = Deps(
         store=RunStore(Path(config["state_dir"])),

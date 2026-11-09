@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
+import subprocess
 import time
 from pathlib import Path
 
@@ -162,14 +164,14 @@ def test_heartbeat_is_run_scoped(tmp_path, stub, monkeypatch):
     assert board.heartbeat(attempt) is False
 
 
-def _request(workspace: Path) -> WorkerRequest:
+def _request(workspace: Path, *, base_sha: str = "a" * 40) -> WorkerRequest:
     return WorkerRequest(
         operation_key="sha256:" + "1" * 64,
         attempt=Attempt(task_id=CARD, run_id=7, profile="factory-runner"),
         profile="factory-runner",
         spec_digest="sha256:" + "2" * 64,
         workspace=str(workspace),
-        base_sha="a" * 40,
+        base_sha=base_sha,
         allowed_scope=(str(workspace),),
         repair_index=0,
         timeout_s=60,
@@ -271,6 +273,102 @@ def test_worker_failure_is_a_typed_outcome(tmp_path, stub, monkeypatch):
     assert receipt.outcome == "failed"
 
 
+def test_worker_derives_a_receipt_from_the_committed_workspace(tmp_path, stub):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e",
+    }
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "a.txt").write_text("base\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "base"],
+        check=True,
+        env={**os.environ, **env},
+    )
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    (repo / "a.txt").write_text("candidate\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "candidate"],
+        check=True,
+        env={**os.environ, **env},
+    )
+    candidate = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    worker = HermesWorker(
+        artifact_root=tmp_path / "artifacts",
+        executable=str(stub),
+        extra_env={"STUB_CHAT_EXIT": "0"},
+    )
+    submitted = worker.submit(_request(repo, base_sha=base))
+    deadline = time.time() + 20
+    receipt = None
+    while time.time() < deadline:
+        receipt = worker.poll(submitted.handle)
+        if receipt is not None:
+            break
+        time.sleep(0.05)
+    assert receipt is not None
+    assert receipt.outcome == "completed"
+    assert receipt.candidate_sha == candidate
+
+
+def test_worker_exit_without_a_new_commit_is_not_success(tmp_path, stub):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    (repo / "a.txt").write_text("base\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "base"],
+        check=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@e",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@e",
+        },
+    )
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    worker = HermesWorker(
+        artifact_root=tmp_path / "artifacts",
+        executable=str(stub),
+        extra_env={"STUB_CHAT_EXIT": "0"},
+    )
+    submitted = worker.submit(_request(repo, base_sha=base))
+    deadline = time.time() + 20
+    receipt = None
+    while time.time() < deadline:
+        receipt = worker.poll(submitted.handle)
+        if receipt is not None:
+            break
+        time.sleep(0.05)
+    assert receipt is not None
+    assert receipt.outcome == "failed"
+    assert "without a candidate commit" in receipt.detail
+
+
 def test_worker_cancellation_targets_its_own_process_group(tmp_path, stub, monkeypatch):
     monkeypatch.setenv("STUB_CHAT_SLEEP", "30")
     worker = HermesWorker(
@@ -304,6 +402,62 @@ def test_live_reviewer_refuses_unenforced_readonly(tmp_path):
         )
     assert excinfo.value.reason == "capability_unenforced"
     assert "blocked, not passed" in excinfo.value.detail
+
+
+def _stored_review(key: str, **overrides) -> dict:
+    payload = {
+        "schema": "factory-review-result/v1",
+        "operation_key": key,
+        "attempt": {"task_id": CARD, "run_id": 7, "profile": "factory-runner"},
+        "reviewer": "factory-qa",
+        "outcome": "approve",
+        "comment": "fine",
+        "candidate_sha": "a" * 40,
+        "base_sha": "b" * 40,
+        "spec_digest": "sha256:" + "c" * 64,
+        "evidence_digest": "sha256:" + "d" * 64,
+        "graph_version": "factory-card/v1",
+        "attestation_digest": "sha256:" + "e" * 64,
+        "audit": {"violations": [], "tool_uses": []},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_reviewer_result_is_readable_after_a_restart(tmp_path):
+    key = "run:request_independent_review:abc"
+    directory = tmp_path / "hermes-reviewer" / key.replace(":", "_")
+    directory.mkdir(parents=True)
+    (directory / "review-result.json").write_text(
+        json.dumps(_stored_review(key), sort_keys=True)
+    )
+
+    # A fresh adapter has no in-memory record; the durable payload must suffice.
+    reviewer = HermesReviewer(HermesWorker(artifact_root=tmp_path))
+    probe = reviewer.probe(key)
+    assert probe.state == "present"
+    assert probe.receipt is not None
+    assert probe.receipt["candidate_sha"] == "a" * 40
+    review = reviewer._read_review(key)
+    assert review is not None
+    assert review.operation_key == key
+    assert review.reviewer == "factory-qa"
+    assert review.outcome == "approve"
+    assert review.attempt.run_id == 7
+
+
+def test_compact_review_result_fails_closed_not_keyerror(tmp_path):
+    key = "run:request_independent_review:abc"
+    directory = tmp_path / "hermes-reviewer" / key.replace(":", "_")
+    directory.mkdir(parents=True)
+    (directory / "review-result.json").write_text(
+        json.dumps({"outcome": "approve", "comment": "thin"})
+    )
+    reviewer = HermesReviewer(HermesWorker(artifact_root=tmp_path))
+    with pytest.raises(OrchestrationError) as excinfo:
+        reviewer._read_review(key)
+    assert excinfo.value.reason == "protocol_error"
+    assert "review receipt" in excinfo.value.detail
 
 
 def test_missing_executable_is_reported_as_unavailable(tmp_path, monkeypatch):

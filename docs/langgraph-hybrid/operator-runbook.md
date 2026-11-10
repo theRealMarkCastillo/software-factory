@@ -90,10 +90,22 @@ host-side exercise of that path.
 ```sh
 factory-orchestrate --state-dir <dir> inspect t_deadbeef
 factory-orchestrate --state-dir <dir> resume t_deadbeef \
-  --payload /abs/worker-receipt.json --resolved-hold "worker request awaited"
+  --resolved-hold "worker request awaited"
+factory-orchestrate --state-dir <dir> resume t_deadbeef \
+  --payload /abs/operator-receipt.json --resolved-hold "worker request awaited"
 factory-orchestrate --state-dir <dir> cancel t_deadbeef --by operator --reason "..."
 factory-orchestrate --state-dir <dir> export t_deadbeef --output /abs/run.json
 ```
+
+`resume` without `--payload` reconciles the pending operation from the
+adapter's durable artifacts and adopts that receipt. A worker or reviewer is
+adopted only when its own `stream.jsonl` carries the child-written `result`
+event; the worker receipt then comes from its result file or its committed
+workspace HEAD (a dirty or unchanged workspace is `failed`), and the reviewer
+receipt is re-audited from the transcript and bound to the candidate, base,
+spec digest, evidence digest and graph version. A transcript without a `result`
+event is `effect_unknown` and holds: it may still be running, so nothing is
+replayed. Delete no artifact to make a run look recoverable.
 
 `inspect` shows: board/card/run/attempt, graph and schema version, stage and last
 reason, worker/session, candidate/base, installed release, engine fingerprint,

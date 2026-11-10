@@ -1159,10 +1159,13 @@ def _implementation_prompt(state: dict, repair_index: int) -> str:
         f"Card: {state['card_id']}\n"
         f"Workspace: {state['workspace_path']}\n"
         f"Base commit: {state['immutable_base_sha']}\n"
+        f"Specification: {state['spec_reference']}\n"
         f"Spec digest: {state['spec_digest']}\n"
         f"Repair index: {repair_index} of {state['max_repairs']}\n"
-        "Work only inside the workspace. Commit the bounded change and report\n"
-        "the full candidate commit SHA. Do not push, merge, deploy or promote.\n"
+        "Read the specification file and make only the change it describes,\n"
+        "inside the workspace. Run the checks it names. Commit the change so the\n"
+        "workspace is clean, and report the full candidate commit SHA.\n"
+        "Do not push, merge, deploy or promote.\n"
     )
 
 

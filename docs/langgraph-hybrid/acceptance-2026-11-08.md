@@ -100,7 +100,7 @@ Host-side acceptance (real Docker, disposable scratch only):
 | T7 repair budget | PASS | original + two repairs exhausts the budget; restart cannot reset it (`tests/test_orchestration_flow.py`) |
 | T8 installed identity | PASS | pinned launcher/ready/deployment/policy identity recomputed; installed verifier negative; full installed `factory run` + `verify` on a disposable repo; graph whose acceptance/verification used the installed launcher (`tests/test_orchestration_installed.py`, `evidence/installed-acceptance.json`, `evidence/hermes-graph-run/`) |
 | T9 opt-in / rollback | PASS | disabled admission refuses before effect; drain allowed; rollback keeps checkpoints readable and legacy cards operable (`tests/test_orchestration_installed.py`) |
-| T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox` (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
+| T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox`. The live real-provider review receipt was generated at `2971e86` and remains bound to the unchanged image pin (`python@sha256:02108f5d…`); the sandbox was re-attested at `651b2ea` and the `651b2ea` graph run exercises the review path (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
 | T11 mismatch holds | PASS | moved base, changed spec, changed graph/schema, changed engine/policy identity and unrecognized release produce holds; no silent migration (`tests/test_orchestration_recovery.py`) |
 | T12 metrics | PARTIAL | observed values only: fixture pilot 1 s / 10 transitions / 0 interventions / 0 repairs; real-worker graph 126 s / 11 transitions / 0 interventions / 0 repairs; historical baseline unavailable and reported as a gap (`evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json`) |
 
@@ -133,7 +133,7 @@ Host-side acceptance (real Docker, disposable scratch only):
   provenance revision).
 - Real installed launcher identity and read-only checks: `bin/factory verify
   --help` (exit 0) and `bin/factory verify` against a nonexistent artifacts
-  directory (exit 1, reason `manifest_missing`).
+  directory (exit 1, reason `artifacts_dir_invalid`).
 - One live Hermes profile invocation (`hermes -p factory-qa chat -q ... --format
   stream-json`) to prove the supported worker transport and session correlation.
 

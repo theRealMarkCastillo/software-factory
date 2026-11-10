@@ -200,10 +200,16 @@ def resume(
     thread: str,
     attempt: Attempt,
     *,
-    payload: dict,
+    payload: dict | None = None,
     resolved_hold: str,
 ) -> DriveResult:
-    """Resume a paused graph, naming the hold/approval being resolved."""
+    """Resume a paused graph, naming the hold/approval being resolved.
+
+    ``payload`` carries an operator-supplied receipt. When it is omitted the
+    runner reconciles the pending operation from the adapter's durable artifacts
+    (the child's own ``result`` event, workspace and result file) and adopts that
+    receipt. An operation that cannot be proved finished is never replayed.
+    """
 
     if not resolved_hold or not resolved_hold.strip():
         raise OrchestrationError(
@@ -222,6 +228,8 @@ def resume(
         raise OrchestrationError("invalid_assignment", "no checkpoint to resume")
     _require_matching_versions(state)
     _require_matching_spec(state)
+    if payload is None:
+        payload = adopt_pending_effect(deps, state)
     if int(state.get("hermes_attempt_id", 0)) != attempt.run_id:
         # A legitimate re-dispatch is a new attempt; it is recorded, never a
         # silent continuation of a superseded one (validated by the board view).
@@ -234,6 +242,40 @@ def resume(
     result = drive(deps, assignment_from_state(state), attempt, resume_payload=payload)
     return replace(
         result, state={**result.state, "hermes_attempt_id": str(attempt.run_id)}
+    )
+
+
+def adopt_pending_effect(deps: Deps, state: dict) -> dict:
+    """Build a resume payload from the pending operation's durable receipt."""
+
+    operations = state.get("operations") or {}
+    pending = [
+        (key, record)
+        for key, record in operations.items()
+        if record.get("state") in {"submitted", "unknown"}
+    ]
+    if not pending:
+        raise OrchestrationError(
+            "invalid_assignment",
+            "no pending effect to adopt; pass --payload with the receipt to apply",
+        )
+    key, record = pending[-1]
+    kind = str(record.get("kind") or "worker")
+    adapter = deps.reviewer if kind == "review" else deps.worker
+    probe = adapter.probe(key)
+    if probe.state == "present" and probe.receipt:
+        if kind == "review":
+            return {"review": probe.receipt}
+        return {"receipt": probe.receipt}
+    if probe.state == "unknown":
+        raise OrchestrationError(
+            "effect_unknown",
+            probe.detail
+            or "the pending effect cannot be proved finished; reconcile it manually",
+        )
+    raise OrchestrationError(
+        "invalid_assignment",
+        f"the pending {kind} operation produced no effect to adopt",
     )
 
 
@@ -385,6 +427,7 @@ def state_as_json(state: FactoryRunState | dict) -> str:
 __all__ = [
     "Deps",
     "DriveResult",
+    "adopt_pending_effect",
     "cancel",
     "current_state",
     "drive",

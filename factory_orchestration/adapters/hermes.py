@@ -422,8 +422,13 @@ class HermesWorker:
                     "argv": argv,
                     "env_names": sorted(env),
                     "workspace": request.workspace,
+                    "base_sha": request.base_sha,
+                    "attempt": request.attempt.as_dict(),
+                    "profile": request.profile,
                     "spec_digest": request.spec_digest,
                     "repair_index": request.repair_index,
+                    "transcript": str(transcript),
+                    "result_path": str(directory / "worker-result.json"),
                     "submitted_at": int(time.time()),
                 },
                 indent=2,
@@ -596,17 +601,73 @@ class HermesWorker:
         )
 
     def probe(self, operation_key: str) -> EffectProbe:
+        """Reconcile a worker launched by an earlier process.
+
+        A restart owns no child handle, so completion is proved from what the
+        child itself left behind: its ``result`` event in ``stream.jsonl``, its
+        optional result file, and its workspace HEAD. A transcript without that
+        event is never treated as finished — it may still be running, so the
+        journal holds instead of replaying the effect.
+        """
+
         if self._receipt_path(operation_key).is_file():
             return EffectProbe(
                 "present",
                 receipt=json.loads(self._receipt_path(operation_key).read_text()),
             )
-        if self._request_path(operation_key).is_file():
+        record = self._record(operation_key)
+        if not record:
+            return EffectProbe("absent")
+        finished, exit_code, session_id = transcript_result(record.get("transcript"))
+        if not finished:
             return EffectProbe(
                 "unknown",
-                detail="a worker was already launched; its mutations cannot be disproved",
+                detail=(
+                    "a worker was launched for this key and is not provably finished"
+                ),
             )
-        return EffectProbe("absent")
+        # Publish the durable request as this instance's record so the receipt
+        # helpers below reconstruct identity and paths without the live handle.
+        self._records.setdefault(operation_key, record)
+        receipt = self._durable_receipt(
+            operation_key,
+            record,
+            exit_code=exit_code or 0,
+            session_id=session_id,
+        )
+        return EffectProbe("present", receipt=receipt.as_dict())
+
+    def _record(self, operation_key: str) -> dict:
+        try:
+            payload = json.loads(self._request_path(operation_key).read_text())
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _durable_receipt(
+        self, key: str, record: dict, *, exit_code: int, session_id: str
+    ) -> WorkerReceipt:
+        from ..operations import _attempt_from
+
+        try:
+            attempt = _attempt_from(record.get("attempt") or {})
+        except (KeyError, TypeError, ValueError):
+            raise OrchestrationError(
+                "protocol_error",
+                "worker request carries no valid attempt identity",
+            ) from None
+        if exit_code:
+            return WorkerReceipt(
+                operation_key=key,
+                attempt=attempt,
+                session_id=session_id,
+                outcome="failed",
+                detail=f"worker exited {exit_code}",
+            )
+        payload = self._read_result(key)
+        if payload is not None:
+            return self._receipt_from(key, payload, session_id=session_id)
+        return self._receipt_from_workspace(key, record, session_id=session_id)
 
     def cancel(self, handle: WorkerHandle) -> CancelReport:
         process = self._processes.get(handle.operation_key)
@@ -660,6 +721,48 @@ def parse_stream_transcript(path: str | Path) -> tuple[str, bool]:
     except OSError:
         return session_id, True
     return session_id, failed
+
+
+def transcript_result(
+    path: str | Path | None,
+) -> tuple[bool, int | None, str]:
+    """Return ``(finished, exit_code, session_id)`` for a worker/reviewer run.
+
+    The ``result`` event is written by the child itself when its run ends, so it
+    is the durable completion marker a *different* process may rely on. A
+    transcript that is missing, empty or truncated proves neither completion nor
+    failure; callers must hold rather than replay the effect.
+    """
+
+    session_id = ""
+    finished = False
+    exit_code: int | None = None
+    if not path:
+        return False, None, session_id
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "system" and event.get("session_id"):
+                    session_id = str(event["session_id"])
+                if event.get("type") == "result":
+                    finished = True
+                    session_id = str(event.get("session_id") or session_id)
+                    raw = event.get("exit_code")
+                    if isinstance(raw, bool) or raw is None:
+                        exit_code = 0 if not raw else 1
+                    elif isinstance(raw, int):
+                        exit_code = raw
+                    else:
+                        exit_code = 1
+    except OSError:
+        return False, None, session_id
+    return finished, exit_code, session_id
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +875,17 @@ class HermesReviewer:
             Path(self.worker.artifact_root) / "hermes-reviewer" / key.replace(":", "_")
         )
 
+    def _record(self, operation_key: str) -> dict:
+        """The durable request written before the reviewer was launched."""
+
+        try:
+            payload = json.loads(
+                (self._dir(operation_key) / "request.json").read_text()
+            )
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def submit(
         self,
         *,
@@ -845,6 +959,10 @@ class HermesReviewer:
                     "argv": argv,
                     "env_names": sorted(env),
                     "reviewer": reviewer,
+                    "attempt": attempt.as_dict(),
+                    "transcript": str(transcript),
+                    "result_path": str(directory / "review-result.json"),
+                    "graph_version": "factory-card/v1",
                     "candidate_sha": candidate_sha,
                     "base_sha": base_sha,
                     "spec_digest": spec_digest,
@@ -1057,14 +1175,35 @@ class HermesReviewer:
         )
 
     def probe(self, operation_key: str) -> EffectProbe:
+        """Reconcile a review launched by an earlier process.
+
+        The verdict is adopted only when the reviewer's own transcript carries
+        its ``result`` event; the scope audit is re-run over the durable
+        transcript and written into the durable receipt, so a restart cannot
+        substitute an unaudited verdict.
+        """
+
         result = self._dir(operation_key) / "review-result.json"
         if result.is_file():
             return EffectProbe("present", receipt=json.loads(result.read_text()))
-        if (self._dir(operation_key) / "request.json").is_file():
+        record = self._record(operation_key)
+        if not record:
+            return EffectProbe("absent")
+        finished, exit_code, _ = transcript_result(record.get("transcript"))
+        if not finished:
             return EffectProbe(
-                "unknown", detail="a reviewer was already launched for this key"
+                "unknown",
+                detail=(
+                    "a reviewer was launched for this key and is not provably finished"
+                ),
             )
-        return EffectProbe("absent")
+        self._records.setdefault(operation_key, record)
+        review = self._read_review(operation_key, exit_code=exit_code or 0)
+        if review is None:  # pragma: no cover - defensive
+            return EffectProbe(
+                "unknown", detail="the reviewer transcript has no readable verdict"
+            )
+        return EffectProbe("present", receipt=json.loads(result.read_text()))
 
     def cancel(self, handle: WorkerHandle) -> CancelReport:
         process = self._processes.get(handle.operation_key)

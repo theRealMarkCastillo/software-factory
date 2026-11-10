@@ -100,7 +100,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     resume_command = sub.add_parser("resume", help="resume a paused run")
     resume_command.add_argument("card")
-    resume_command.add_argument("--payload", required=True, help="resume JSON file")
+    resume_command.add_argument(
+        "--payload",
+        default=None,
+        help=(
+            "resume JSON file; omit to adopt the pending operation's durable "
+            "receipt (a finished child is proved from its own transcript)"
+        ),
+    )
     resume_command.add_argument(
         "--resolved-hold", required=True, help="the hold/approval being resolved"
     )
@@ -239,7 +246,7 @@ def _dispatch(args, store: RunStore, state_dir: Path) -> int:
             profile=args.attempt_profile or run_row["profile"],
             claim_lock=run_row["claim_lock"],
         )
-        payload = json.loads(Path(args.payload).read_text())
+        payload = json.loads(Path(args.payload).read_text()) if args.payload else None
         result = resume(
             deps,
             thread,

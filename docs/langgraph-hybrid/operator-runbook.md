@@ -221,6 +221,28 @@ attestation and the review in the same adapter instance, so the receipt and the
 transcript cannot drift; the attestation digest is recorded in the run summary.
 It requires Docker and the named profile's provider credential.
 
+## Pilot harness (installed, frozen)
+
+`scripts/langgraph_rollout_pilot.py` is part of the release and is the only
+sanctioned way to drive a real-card pilot:
+
+```sh
+<release>/engine/.venv/bin/python <release>/engine/scripts/langgraph_rollout_pilot.py \
+  --run-root <new unique dir> --launcher <release>/bin/factory \
+  --card <card> --attempt-run-id <current run> --attempt-profile factory-runner \
+  --claim-lock <current claim>
+<release>/engine/.venv/bin/python <release>/engine/scripts/langgraph_rollout_pilot.py \
+  --status --run-root <dir>
+```
+
+It refuses an existing run root, creates the disposable repository/workspace and
+acceptance wrapper under it, drives `run`/`resume` (including a duplicate-run
+refusal and a premature-resume refusal while the worker is live), waits only on
+the operation key the graph is actually awaiting, and stops with
+`effect_unknown` as a safety hold. A deliberate one-shot acceptance failure
+exercises exactly one bounded repair. `pilot-summary.json` always carries an
+`exit` and `final_status`.
+
 ## Known gaps in this increment
 
 - **T10 scope:** enforced for the reviewer's tool effects, not whole-agent

@@ -214,6 +214,67 @@ def test_resume_keeps_the_state_directory_as_the_default_artifact_root(tmp_path)
     assert deps.artifact_dir == state
 
 
+def test_reviewed_json_assignment_is_admitted(tmp_path):
+    """A JSON assignment can never carry a tuple; the CLI boundary converts."""
+
+    from factory_orchestration.cli import _assignment_payload
+    from factory_orchestration.state import RunAssignment
+
+    assignment = RunAssignment(
+        **_assignment_payload(
+            {
+                "board_id": "software-factory",
+                "card_id": "t_abcd1234",
+                "repository": str(tmp_path / "repo"),
+                "workspace_path": str(tmp_path / "workspace"),
+                "immutable_base_sha": "a" * 40,
+                "spec_reference": str(tmp_path / "spec.md"),
+                "spec_digest": "sha256:" + "b" * 64,
+                "template_id": "bounded-card-v1",
+                "worker_profile": "factory-runner",
+                "reviewer_profile": "factory-qa",
+                "acceptance_argv": ["/bin/true", "t_abcd1234"],
+                "acceptance_artifacts": str(tmp_path / "artifacts"),
+                "engine_release_reference": "installed:test",
+                "engine_fingerprint": "sha256:" + "c" * 64,
+                "host_policy_digest": "sha256:" + "d" * 64,
+                "entire_references": ["entire:one"],
+            }
+        )
+    )
+    assert assignment.acceptance_argv == ("/bin/true", "t_abcd1234")
+    assert assignment.entire_references == ("entire:one",)
+
+
+def test_json_assignment_still_refuses_an_empty_argv(tmp_path):
+    from factory_orchestration.cli import _assignment_payload
+    from factory_orchestration.state import RunAssignment
+
+    with pytest.raises(OrchestrationError) as excinfo:
+        RunAssignment(
+            **_assignment_payload(
+                {
+                    "board_id": "software-factory",
+                    "card_id": "t_abcd1234",
+                    "repository": str(tmp_path / "repo"),
+                    "workspace_path": str(tmp_path / "workspace"),
+                    "immutable_base_sha": "a" * 40,
+                    "spec_reference": str(tmp_path / "spec.md"),
+                    "spec_digest": "sha256:" + "b" * 64,
+                    "template_id": "bounded-card-v1",
+                    "worker_profile": "factory-runner",
+                    "reviewer_profile": "factory-qa",
+                    "acceptance_argv": [],
+                    "acceptance_artifacts": str(tmp_path / "artifacts"),
+                    "engine_release_reference": "installed:test",
+                    "engine_fingerprint": "sha256:" + "c" * 64,
+                    "host_policy_digest": "sha256:" + "d" * 64,
+                }
+            )
+        )
+    assert excinfo.value.reason == "invalid_assignment"
+
+
 def test_metrics_report_observed_values_without_a_baseline(tmp_path):
     seeded = seed(tmp_path)
     seeded["reviewer"].outcome = "inconclusive"

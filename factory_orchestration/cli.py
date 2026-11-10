@@ -214,6 +214,23 @@ def _reviewer(args, store: RunStore, artifacts: Path) -> HermesReviewer:
     )
 
 
+def _assignment_payload(payload: dict) -> dict:
+    """The JSON boundary for a reviewed assignment file.
+
+    JSON has no tuple type, but the versioned state requires tuples for the two
+    argv/reference lists. Coerce exactly those fields (and only those) so a
+    reviewed ``assignment.json`` can be admitted; anything else still goes
+    through ``RunAssignment``'s validation unchanged.
+    """
+
+    converted = dict(payload)
+    for name in ("acceptance_argv", "entire_references"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return converted
+
+
 def _dispatch(args, store: RunStore, state_dir: Path) -> int:
     if args.command == "admission":
         return _admission(args, state_dir)
@@ -224,7 +241,7 @@ def _dispatch(args, store: RunStore, state_dir: Path) -> int:
         payload.setdefault("engine_release_reference", release_reference)
         payload.setdefault("engine_fingerprint", fingerprint)
         payload.setdefault("host_policy_digest", policy_digest)
-        assignment = RunAssignment(**payload)
+        assignment = RunAssignment(**_assignment_payload(payload))
         attempt = _attempt(args, assignment, store)
         result = drive(deps, assignment, attempt)
         print(json.dumps(result.as_dict(), indent=2, sort_keys=True))

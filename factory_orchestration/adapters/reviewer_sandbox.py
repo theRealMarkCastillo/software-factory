@@ -192,6 +192,7 @@ def sandbox_config_yaml(
         "  context_length: 128000\n"
         "agent:\n"
         f"  api_max_retries: {api_max_retries}\n"
+        '  coding_context: "off"\n'
         "telemetry:\n"
         "  shared_metrics:\n"
         "    enabled: false\n"

@@ -17,6 +17,7 @@ REASON_CODES = frozenset(
         "workspace_conflict",
         "version_mismatch",
         "stale_attempt",
+        "cross_attempt_resume_unsupported",
         "owner_grant_absent",
         # ownership / controls
         "cancellation_pending",

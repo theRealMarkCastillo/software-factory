@@ -89,6 +89,7 @@ def _route_for(reason: str) -> str:
         "worker_unavailable": "hold_infrastructure",
         "gate_unavailable": "hold_infrastructure",
         "stale_attempt": "hold_operator",
+        "cross_attempt_resume_unsupported": "hold_operator",
         "owner_grant_absent": "hold_operator",
         "review_scope_violation": "hold_operator",
         "review_unavailable": "hold_infrastructure",

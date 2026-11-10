@@ -330,10 +330,30 @@ def engine_identity() -> dict:
 
 
 def _environment_snapshot(repo: Path, env_file: str) -> dict:
-    path = repo / env_file
-    if not path.is_file():
-        return {"path": str(path), "present": False}
-    return {"path": str(path), "present": True, "sha256": _sha256(path)}
+    """Project an environment record into the evidence's review surface.
+
+    The reviewer sees this manifest under ``/evidence/candidate``; a host
+    absolute path here would name a path the reviewer is forbidden (and unable)
+    to use. Keep the record repo-relative and state its origin; the manifest
+    digest bound in the run receipt still proves which host file was hashed.
+    """
+
+    path = (repo / env_file).resolve()
+    try:
+        relative = path.relative_to(repo.resolve()).as_posix()
+    except ValueError as exc:
+        raise EvidenceError(
+            f"environment file escapes the repository root: {env_file}"
+        ) from exc
+    record = {
+        "path": relative,
+        "path_rel": relative,
+        "origin": "repo",
+        "present": path.is_file(),
+    }
+    if path.is_file():
+        record["sha256"] = _sha256(path)
+    return record
 
 
 def _fixture_records(repo: Path, fixture_paths: Iterable[str]) -> list[dict]:
@@ -824,12 +844,36 @@ def _check_structure(manifest: dict) -> None:
 
     environment = manifest.get("environment")
     _require(isinstance(environment, dict), "environment must be a mapping")
+    assert isinstance(environment, dict)  # narrowing only; _require already refused
     example = environment.get("example_env")
     _require(isinstance(example, dict), "environment.example_env must be a mapping")
+    assert isinstance(example, dict)
     _require(
         example.get("present") is True,
         "environment.example_env.present must be true (documented environment)",
     )
+    for name in ("example_env", "runtime_env"):
+        record = environment.get(name)
+        if not isinstance(record, dict):
+            continue
+        projected = record.get("path")
+        if projected is None:
+            continue
+        _require(
+            isinstance(projected, str) and bool(projected),
+            f"environment.{name}.path must be a non-empty string",
+        )
+        _require(
+            not _is_host_absolute_path(projected),
+            f"environment.{name}.path must be repo-relative, not a host path: "
+            f"{projected}",
+        )
+
+
+def _is_host_absolute_path(value: str) -> bool:
+    """A POSIX/Windows absolute path (the reviewer surface forbids these)."""
+
+    return value.startswith(("/", "\\")) or bool(re.match(r"^[A-Za-z]:[\\/]", value))
 
 
 def _check_engine(manifest: dict) -> tuple[bool, str]:

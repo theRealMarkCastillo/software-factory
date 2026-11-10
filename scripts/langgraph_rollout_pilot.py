@@ -112,7 +112,13 @@ class Pilot:
 
     # -- persistence -------------------------------------------------------
     def write_status(self, payload: dict) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
+        """Write status inside the attempt root ``prepare()`` already created.
+
+        Status must never create the immutable root: ``prepare()`` owns creation
+        and refuses an existing root, so a status write before it would make
+        every attempt refuse itself.
+        """
+
         self.status_path.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n"
         )
@@ -299,7 +305,18 @@ class Pilot:
         if path is None:
             return False
         if kind == "await_review":
-            return (path / "review-result.json").is_file()
+            # The durable receipt and the reviewer transcript are equivalent
+            # completion signals; whichever arrives first ends the wait. Both
+            # paths are scoped to this operation key, so a stale result from a
+            # different operation cannot satisfy it.
+            if (path / "review-result.json").is_file():
+                return True
+            transcript = path / "stream.jsonl"
+            return self._has_result_event(transcript)
+        return self._has_result_event(path)
+
+    @staticmethod
+    def _has_result_event(path: Path) -> bool:
         if not path.is_file():
             return False
         for line in path.read_text(errors="replace").splitlines():
@@ -358,8 +375,10 @@ class Pilot:
 
     def execute(self) -> int:
         self.check_grant()
-        self.write_status({"finished": False, "exit": None, "phase": "preparing"})
+        # prepare() owns creation of the never-reused root; status may only be
+        # written after it, inside that root.
         base, wrapper = self.prepare()
+        self.write_status({"finished": False, "exit": None, "phase": "preparing"})
         spec_digest = "sha256:" + hashlib.sha256(self.spec.read_bytes()).hexdigest()
         self.assignment.write_text(
             json.dumps(

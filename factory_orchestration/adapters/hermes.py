@@ -226,11 +226,26 @@ class OwnerGrant:
         return cls(task_id=task, run_id=run_id, claim_lock=lock)
 
     def authorizes(self, attempt: Attempt) -> bool:
+        return self.refusal(attempt) is None
+
+    def refusal(self, attempt: Attempt) -> str | None:
+        """Why this grant cannot act for ``attempt``, or ``None`` when it can.
+
+        Task and run are the dispatcher's identity. The claim lock is compared
+        strictly: a resume reconstructed from an earlier store row carries that
+        attempt's lock, and a *new* claim for the same run is a different
+        attempt, not proof that the old one still owns it. Recovery across
+        attempts is therefore explicitly unsupported rather than silently
+        accepted, so a stale writer can never look authorized.
+        """
+
         if self.task_id != attempt.task_id or self.run_id != attempt.run_id:
-            return False
+            return "stale_attempt"
         if not self.claim_lock:
-            return False
-        return attempt.claim_lock in (None, "", self.claim_lock)
+            return "owner_grant_absent"
+        if attempt.claim_lock and attempt.claim_lock != self.claim_lock:
+            return "cross_attempt_resume_unsupported"
+        return None
 
 
 @dataclass
@@ -304,11 +319,20 @@ class HermesBoard:
                 "(HERMES_KANBAN_TASK/RUN_ID/CLAIM_LOCK); refusing to act",
             )
         if not grant.authorizes(attempt):
-            raise OrchestrationError(
-                "stale_attempt",
-                f"dispatcher grant {grant.task_id}#{grant.run_id} does not "
-                f"authorize {attempt.task_id}#{attempt.run_id}",
-            )
+            reason = grant.refusal(attempt) or "stale_attempt"
+            if reason == "cross_attempt_resume_unsupported":
+                detail = (
+                    f"dispatcher grant {grant.task_id}#{grant.run_id} is a new "
+                    f"claim ({grant.claim_lock}); the attempt was recorded under "
+                    f"{attempt.claim_lock}. Cross-attempt resume is unsupported: "
+                    "recover inside the attempt that owns the grant"
+                )
+            else:
+                detail = (
+                    f"dispatcher grant {grant.task_id}#{grant.run_id} does not "
+                    f"authorize {attempt.task_id}#{attempt.run_id}"
+                )
+            raise OrchestrationError(reason, detail)
         payload = self.show(attempt.task_id)
         task = payload.get("task") or {}
         runs = payload.get("runs") or []
@@ -912,9 +936,21 @@ class HermesReviewer:
         directory = self._dir(operation_key)
         directory.mkdir(parents=True, exist_ok=True)
         transcript = directory / "stream.jsonl"
-        if self.review_model and hasattr(self.attestor, "spec_for"):
+        # The reviewer's *tools* run in its container at /evidence; the host
+        # session cwd must be a host directory (Hermes builds a policy only for
+        # an existing absolute path), but it must never be advertised to the
+        # model. The sandbox config disables coding posture, so no host
+        # workspace block reaches the prompt, and the assignment names
+        # /evidence paths only.
+        agent_cwd = str(workspace)
+        sandboxed = bool(self.review_model and hasattr(self.attestor, "spec_for"))
+        if sandboxed:
             from .reviewer_sandbox import prepare_sandbox
 
+            # Keep the host session cwd in the factory's own artifact tree, not
+            # the candidate workspace: nothing about the host workspace is a
+            # legitimate part of the reviewer's context.
+            agent_cwd = str(directory)
             spec = self.attestor.spec_for(workspace, artifacts)
             prepare_sandbox(
                 spec,
@@ -941,7 +977,7 @@ class HermesReviewer:
             "file",
             "--ignore-rules",
             "--in",
-            str(workspace),
+            agent_cwd,
         ]
         env = child_environment(
             home=attestation.home,
@@ -959,6 +995,9 @@ class HermesReviewer:
                     "argv": argv,
                     "env_names": sorted(env),
                     "reviewer": reviewer,
+                    "review_cwd": agent_cwd,
+                    "review_root": "/evidence",
+                    "sandboxed": sandboxed,
                     "attempt": attempt.as_dict(),
                     "transcript": str(transcript),
                     "result_path": str(directory / "review-result.json"),

@@ -12,12 +12,14 @@ from pathlib import Path
 import pytest
 from factory_orch_fixtures import CARD
 
+from factory_orchestration.adapters.base import AttestationReceipt
 from factory_orchestration.adapters.hermes import (
     HermesBoard,
     HermesReviewer,
     HermesWorker,
     NoReadonlyEnforcement,
 )
+from factory_orchestration.adapters.reviewer_sandbox import SandboxSpec
 from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.state import Attempt, WorkerRequest
 
@@ -119,6 +121,25 @@ def test_board_refuses_a_grant_for_a_different_run(tmp_path, stub, monkeypatch):
     with pytest.raises(OrchestrationError) as excinfo:
         board.view(attempt)
     assert excinfo.value.reason == "stale_attempt"
+
+
+def test_board_refuses_a_new_claim_for_the_same_run_as_cross_attempt(
+    tmp_path, stub, monkeypatch
+):
+    """A re-claim of the same run is not evidence that the old attempt still owns it."""
+
+    monkeypatch.setenv("STUB_SHOW", str(tmp_path / "show.json"))
+    monkeypatch.setenv("HERMES_KANBAN_TASK", CARD)
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", "7")
+    monkeypatch.setenv("HERMES_KANBAN_CLAIM_LOCK", "host:2")
+    board = HermesBoard(executable=str(stub), board="software-factory")
+    attempt = Attempt(
+        task_id=CARD, run_id=7, profile="factory-runner", claim_lock="host:1"
+    )
+    with pytest.raises(OrchestrationError) as excinfo:
+        board.view(attempt)
+    assert excinfo.value.reason == "cross_attempt_resume_unsupported"
+    assert "recover inside the attempt that owns the grant" in excinfo.value.detail
 
 
 def test_superseded_run_is_not_current_even_with_a_grant(tmp_path, stub, monkeypatch):
@@ -402,6 +423,84 @@ def test_live_reviewer_refuses_unenforced_readonly(tmp_path):
         )
     assert excinfo.value.reason == "capability_unenforced"
     assert "blocked, not passed" in excinfo.value.detail
+
+
+class _SandboxStub:
+    """Minimal attestor: the executed attestation is covered by its own tests."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def attest(self, *, reviewer, candidate, evidence):
+        return AttestationReceipt(
+            enforced=True, reason="ok", home=str(self.root / "home")
+        )
+
+    def spec_for(self, candidate, evidence):
+        probe = self.root / "probe"
+        probe.mkdir(parents=True, exist_ok=True)
+        (probe / "probe.txt").write_text("probe\n")
+        return SandboxSpec(
+            name="factory-reviewer",
+            root=self.root / "sandbox",
+            candidate=Path(candidate),
+            evidence=Path(evidence),
+            image="python:3.12-slim@sha256:" + "0" * 64,
+            probe=probe,
+        )
+
+    def verify_terminal(self, spec):
+        return None
+
+
+def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
+    """D4: no host workspace block may reach the reviewer's prompt."""
+
+    workspace = tmp_path / "workspace"
+    evidence = tmp_path / "evidence"
+    workspace.mkdir()
+    evidence.mkdir()
+    reviewer = HermesReviewer(
+        HermesWorker(artifact_root=tmp_path, executable=str(stub)),
+        _SandboxStub(tmp_path / "attest"),
+        review_provider="custom",
+        review_base_url="http://127.0.0.1:1/v1",
+        review_model="stub-model",
+        provider_env={"OPENAI_API_KEY": "test"},
+    )
+    reviewer.submit(
+        operation_key="k",
+        attempt=Attempt(task_id=CARD, run_id=7, profile="factory-runner"),
+        reviewer="factory-qa",
+        workspace=str(workspace),
+        candidate_sha="a" * 40,
+        base_sha="b" * 40,
+        spec_digest="sha256:" + "c" * 64,
+        evidence_digest="sha256:" + "d" * 64,
+        artifacts=str(evidence),
+        timeout_s=60,
+    )
+    directory = tmp_path / "hermes-reviewer" / "k"
+    request = json.loads((directory / "request.json").read_text())
+    assert request["sandboxed"] is True
+    assert request["review_root"] == "/evidence"
+    # The host session cwd stays in the factory's own tree, not the candidate.
+    assert request["review_cwd"] == str(directory)
+    assert request["review_cwd"] != str(workspace)
+    argv = request["argv"]
+    assert str(workspace) not in argv
+    prompt = argv[argv.index("-q") + 1]
+    assert "/evidence/candidate" in prompt
+    assert str(workspace) not in prompt
+    config = (
+        tmp_path
+        / "attest"
+        / "sandbox"
+        / "profiles"
+        / "factory-reviewer"
+        / "config.yaml"
+    ).read_text()
+    assert 'coding_context: "off"' in config
 
 
 def _stored_review(key: str, **overrides) -> dict:

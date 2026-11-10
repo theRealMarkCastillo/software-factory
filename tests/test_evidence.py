@@ -1,3 +1,4 @@
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -61,6 +62,39 @@ def test_manifest_records_revision_environment_entry_point_and_fixture_hash(tmp_
     assert manifest["environment"]["example_env"]["present"] is True
     assert manifest["fixtures"][0]["path"] == "fixture.json"
     assert len(manifest["fixtures"][0]["sha256"]) == 64
+
+
+def test_environment_record_is_repo_relative_with_provenance(tmp_path):
+    """The reviewer sees the manifest under /evidence; a host path there is a trap."""
+
+    repo = _repo(tmp_path)
+    output = write_evidence_manifest(
+        tmp_path / "artifacts", repo, entry_point="MCP", command="pytest"
+    )
+    manifest = json.loads(output.read_text())
+    example = manifest["environment"]["example_env"]
+    assert example["path"] == ".env.example"
+    assert example["path_rel"] == ".env.example"
+    assert example["origin"] == "repo"
+    assert example["present"] is True
+    assert (
+        example["sha256"]
+        == hashlib.sha256((repo / ".env.example").read_bytes()).hexdigest()
+    )
+    assert str(repo) not in output.read_text()
+    sidecar = (output.parent / SIDECAR_FILENAME).read_text().split()[0]
+    assert sidecar == hashlib.sha256(output.read_bytes()).hexdigest()
+
+
+def test_validation_rejects_a_host_absolute_environment_path(tmp_path):
+    repo = _repo(tmp_path)
+    artifacts = _log_dir(tmp_path)
+    _, manifest = _write_v2(tmp_path, repo, artifacts)
+    manifest["environment"]["example_env"]["path"] = str(repo / ".env.example")
+    result = check_evidence(manifest, artifacts_dir=artifacts)
+    assert result.ok is False
+    assert result.reason == "malformed_manifest"
+    assert "repo-relative" in result.detail
 
 
 def test_manifest_records_execution_result(tmp_path):

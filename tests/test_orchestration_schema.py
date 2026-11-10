@@ -90,7 +90,12 @@ def test_worker_receipt_requires_a_candidate():
 
 
 def test_reason_vocabulary_is_closed():
-    assert {"stale_attempt", "effect_unknown", "cancelled"} <= REASON_CODES
+    assert {
+        "stale_attempt",
+        "cross_attempt_resume_unsupported",
+        "effect_unknown",
+        "cancelled",
+    } <= REASON_CODES
     with pytest.raises(ValueError):
         OrchestrationError("made_up_reason")
 

@@ -492,6 +492,7 @@ def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
     assert str(workspace) not in argv
     prompt = argv[argv.index("-q") + 1]
     assert "/evidence/candidate" in prompt
+    assert "Only /evidence/candidate and /evidence/evidence are readable" in prompt
     assert str(workspace) not in prompt
     config = (
         tmp_path

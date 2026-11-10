@@ -7,12 +7,29 @@ import threading
 
 from factory_orch_fixtures import seed
 
-from factory_orchestration.graph import thread_id
+from factory_orchestration.graph import _implementation_prompt, thread_id
 from factory_orchestration.runner import drive, inspect_run, resume
 
 
 def _drive(seeded):
     return drive(seeded["deps"], seeded["assignment"], seeded["attempt"])
+
+
+def test_implementation_prompt_does_not_hand_the_worker_the_board():
+    prompt = _implementation_prompt(
+        {
+            "card_id": "t_secret",
+            "workspace_path": "/tmp/ws",
+            "immutable_base_sha": "a" * 40,
+            "spec_reference": "/tmp/spec.md",
+            "spec_digest": "sha256:" + "b" * 64,
+            "max_repairs": 2,
+        },
+        0,
+    )
+    assert "t_secret" not in prompt
+    assert "Do not run `hermes kanban`" in prompt
+    assert "the orchestrator owns" in prompt
 
 
 def test_happy_path_returns_a_proposal_with_full_provenance(tmp_path):

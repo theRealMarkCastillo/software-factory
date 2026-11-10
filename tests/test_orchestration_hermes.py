@@ -258,6 +258,7 @@ def test_worker_invocation_uses_stream_json_and_scrubs_ownership(
     call = json.loads(log.read_text().splitlines()[-1])
     assert call["argv"][:3] == ["-p", "factory-runner", "chat"]
     assert "--format" in call["argv"] and "stream-json" in call["argv"]
+    assert call["argv"][call["argv"].index("-t") + 1] == "terminal,file"
     env = call["env"]
     for forbidden in (
         "HERMES_KANBAN_TASK",

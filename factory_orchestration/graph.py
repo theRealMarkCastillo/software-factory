@@ -1157,7 +1157,6 @@ def _implementation_prompt(state: dict, repair_index: int) -> str:
 
     return (
         "You are the implementation worker for a bounded factory card.\n"
-        f"Card: {state['card_id']}\n"
         f"Workspace: {state['workspace_path']}\n"
         f"Base commit: {state['immutable_base_sha']}\n"
         f"Specification: {state['spec_reference']}\n"
@@ -1167,6 +1166,8 @@ def _implementation_prompt(state: dict, repair_index: int) -> str:
         "inside the workspace. Run the checks it names. Commit the change so the\n"
         "workspace is clean, and report the full candidate commit SHA.\n"
         "Do not push, merge, deploy or promote.\n"
+        "Do not run `hermes kanban` or use any Kanban tool: the orchestrator owns\n"
+        "the card lifecycle. Change only files inside the workspace.\n"
     )
 
 

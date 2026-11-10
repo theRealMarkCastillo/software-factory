@@ -430,6 +430,8 @@ class HermesWorker:
             "stream-json",
             "--max-turns",
             str(self.max_turns),
+            "-t",
+            "terminal,file",
             "--in",
             request.workspace,
         ]

@@ -40,12 +40,21 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration admission \
 means disabled. `--disable` stops new admissions; runs already paused can still
 be inspected, drained or cancelled.
 
-## Run one card (inside the claimed worker)
+## Run one card (inside the sanctioned owner process)
 
-The graph executes **in the process that already owns the Hermes attempt**. Its
-attempt identity comes from the dispatcher-granted environment
-(`HERMES_KANBAN_TASK`, `HERMES_KANBAN_RUN_ID`, `HERMES_PROFILE`). There is no
-separate scheduler to start.
+The graph must execute in a process that holds the dispatcher grant for the
+attempt: `HERMES_KANBAN_TASK`, `HERMES_KANBAN_RUN_ID` and
+`HERMES_KANBAN_CLAIM_LOCK` in its environment. There is no separate scheduler to
+start.
+
+**A tool subprocess of a dispatched worker does not hold that grant.** Hermes
+strips the three variables from every tool child (and stamps
+`HERMES_DELEGATED_CHILD_CONTEXT`), so `factory orchestrate` run from a worker's
+terminal can only refuse `owner_grant_absent`. The sanctioned owner handoff is
+not implemented in Hermes yet; see `owner-handoff.md` for the measured defect and
+the two candidate interfaces. Do not work around it by exporting values read
+from the board, by copying a worker's environment, or by making the graph claim
+the card.
 
 ```sh
 factory-orchestrate --state-dir ~/.hermes/factory-orchestration run \
@@ -227,16 +236,20 @@ It requires Docker and the named profile's provider credential.
 sanctioned way to drive a real-card pilot:
 
 ```sh
-<release>/engine/.venv/bin/python <release>/engine/scripts/langgraph_rollout_pilot.py \
+<release>/.runtime/current/engine/.venv/bin/python \
+  <release>/.runtime/current/engine/scripts/langgraph_rollout_pilot.py \
   --run-root <new unique dir> --launcher <release>/bin/factory \
   --card <card> --attempt-run-id <current run> --attempt-profile factory-runner \
   --claim-lock <current claim>
-<release>/engine/.venv/bin/python <release>/engine/scripts/langgraph_rollout_pilot.py \
+<release>/.runtime/current/engine/.venv/bin/python \
+  <release>/.runtime/current/engine/scripts/langgraph_rollout_pilot.py \
   --status --run-root <dir>
 ```
 
-It refuses an existing run root, creates the disposable repository/workspace and
-acceptance wrapper under it, drives `run`/`resume` (including a duplicate-run
+`<release>` is the staged release root (for example
+`.../.runtime/staging/09dbee2`); `<release>/engine` does not exist, the engine
+tree is under `<release>/.runtime/current/engine`. The harness refuses an
+existing run root, creates the disposable repository/workspace and acceptance wrapper under it, drives `run`/`resume` (including a duplicate-run
 refusal and a premature-resume refusal while the worker is live), waits only on
 the operation key the graph is actually awaiting, and stops with
 `effect_unknown` as a safety hold. A deliberate one-shot acceptance failure
@@ -245,6 +258,11 @@ exercises exactly one bounded repair. `pilot-summary.json` always carries an
 
 ## Known gaps in this increment
 
+- **Owner handoff (blocking the real-card pilot).** Hermes grants the attempt to
+  the dispatched worker process but strips the grant from every tool subprocess,
+  so the installed CLI cannot be the attempt owner from a card worker. Measured
+  evidence and the two candidate interfaces are in `owner-handoff.md`; no
+  sanctioned handoff exists yet.
 - **T10 scope:** enforced for the reviewer's tool effects, not whole-agent
   containment. The host launcher/profile, provider egress, in-container
   `execve`, the image and the Docker daemon remain trusted; see

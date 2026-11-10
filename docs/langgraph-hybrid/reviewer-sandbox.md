@@ -80,9 +80,13 @@ digests, `graph_version`) rather than a compact verdict.
 
 The post-hoc transcript audit allows `/evidence/**` for every tool and a bare
 `/` only as the `path` argument of `search_files` (a container-local root
-listing; the container has no host mount other than `/evidence`). That audit is
-detection, not prevention: prevention is the container posture measured by the
-attestation, and a path outside the container's mounts has nothing to read.
+listing). The container's host mounts are the read-only candidate, evidence and
+probe binds under `/evidence`, plus the disposable reviewer profile's own
+read-only `~/.hermes` directories (attachments, composer-pastes, caches) under
+`/root/.hermes`; `/Users` and the host `~/.hermes/auth.json` are absent. That
+audit is detection, not prevention: prevention is the container posture measured
+by the attestation, and a path outside the container's mounts has nothing to
+read.
 Any other path-like argument, any out-of-surface tool, or a missing terminal
 `result` event makes the review `inconclusive` (`review_scope_violation`).
 

@@ -114,6 +114,14 @@ def build_parser() -> argparse.ArgumentParser:
     resume_command.add_argument("--attempt-run-id", type=int)
     resume_command.add_argument("--attempt-profile")
     resume_command.add_argument("--board", default=None)
+    resume_command.add_argument(
+        "--artifacts",
+        default=None,
+        help=(
+            "artifact directory holding the durable worker/reviewer requests "
+            "(default: the state directory, matching run's default)"
+        ),
+    )
     _add_review_options(resume_command)
 
     admission = sub.add_parser("admission", help="inspect or change the opt-in policy")

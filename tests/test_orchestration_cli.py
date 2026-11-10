@@ -172,6 +172,48 @@ def test_run_refuses_an_unenrolled_card_before_any_effect(tmp_path):
     assert not (seeded["worker"].root / "worker-requests").exists()
 
 
+def test_resume_accepts_the_artifact_directory_of_the_run(tmp_path):
+    from factory_orchestration.cli import _deps, build_parser
+    from factory_orchestration.store import RunStore
+
+    artifacts = tmp_path / "artifacts"
+    parsed = build_parser().parse_args(
+        [
+            "--state-dir",
+            str(tmp_path / "state"),
+            "resume",
+            "t_abcd1234",
+            "--resolved-hold",
+            "worker request awaited",
+            "--artifacts",
+            str(artifacts),
+        ]
+    )
+    assert parsed.payload is None
+    deps = _deps(parsed, RunStore(tmp_path / "state"), tmp_path / "state")
+    assert deps.artifact_dir == artifacts
+    assert deps.worker.artifact_root == artifacts
+
+
+def test_resume_keeps_the_state_directory_as_the_default_artifact_root(tmp_path):
+    from factory_orchestration.cli import _deps, build_parser
+    from factory_orchestration.store import RunStore
+
+    state = tmp_path / "state"
+    parsed = build_parser().parse_args(
+        [
+            "--state-dir",
+            str(state),
+            "resume",
+            "t_abcd1234",
+            "--resolved-hold",
+            "worker request awaited",
+        ]
+    )
+    deps = _deps(parsed, RunStore(state), state)
+    assert deps.artifact_dir == state
+
+
 def test_metrics_report_observed_values_without_a_baseline(tmp_path):
     seeded = seed(tmp_path)
     seeded["reviewer"].outcome = "inconclusive"

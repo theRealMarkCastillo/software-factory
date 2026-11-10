@@ -90,7 +90,7 @@ host-side exercise of that path.
 ```sh
 factory-orchestrate --state-dir <dir> inspect t_deadbeef
 factory-orchestrate --state-dir <dir> resume t_deadbeef \
-  --resolved-hold "worker request awaited"
+  --resolved-hold "worker request awaited" --artifacts <dir>
 factory-orchestrate --state-dir <dir> resume t_deadbeef \
   --payload /abs/operator-receipt.json --resolved-hold "worker request awaited"
 factory-orchestrate --state-dir <dir> cancel t_deadbeef --by operator --reason "..."

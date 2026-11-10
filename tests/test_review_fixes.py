@@ -203,7 +203,7 @@ def test_polyglot_audit_runs_npm_even_with_python_venv(tmp_path: Path, monkeypat
     assert "typescript" in result.language
 
 
-def test_npm_audit_error_json_is_unavailable(tmp_path: Path, monkeypatch):
+def test_npm_audit_error_json_is_blocking(tmp_path: Path, monkeypatch):
     class Proc:
         returncode = 1
         stdout = '{"error":{"code":"ENOLOCK"}}'
@@ -211,4 +211,5 @@ def test_npm_audit_error_json_is_unavailable(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(audit.subprocess, "run", lambda *args, **kwargs: Proc())
     result = _run_npm_audit(tmp_path)
-    assert result.status == "unavailable"
+    # An npm error payload is an unverified result: blocking, never a pass.
+    assert result.status == "invalid"

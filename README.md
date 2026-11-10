@@ -117,10 +117,11 @@ Containers and project names do not establish isolation against malicious host
 processes, arbitrary code execution, or every Docker feature.
 
 A zero test exit is only one part of acceptance. The runner also requires valid
-evidence and gate outcomes. Disabled gates and unavailable audits can leave useful
-diagnostic artifacts, but cannot certify an assembled acceptance pass. Abrupt
-process termination can prevent cleanup; postflight comparison is detection, not
-rollback or proof that nothing happened during execution.
+evidence and gate outcomes. A dependency audit that cannot verify its report
+stops the run before Docker, and disabled gates or any non-pass gate result
+cannot certify an assembled acceptance pass. Abrupt process termination can
+prevent cleanup; postflight comparison is detection, not rollback or proof that
+nothing happened during execution.
 
 Acceptance evidence is schema-versioned and bound to a clean source revision, an
 immutable diff base and the engine build that produced it. `factory-verify`

@@ -152,20 +152,18 @@ def _run_preflight_gates(repo: Path, result: RunResult, base_info: dict) -> bool
             "passed": False,
             "detail": f"{type(exc).__name__}: {exc}",
         }
-    if result.gates["audit"].get("status") not in (
-        "pass",
-        "unavailable",
-        "no_manifest",
-    ):
+    # Fail closed: only a verified pass (or a substantiated no-manifest
+    # inapplicability) may advance to Docker. An audit that could not read or
+    # verify a report is not a warning -- it is a blocking gate result.
+    audit_status = result.gates["audit"].get("status")
+    if audit_status not in ("pass", "no_manifest"):
+        result.log.append(
+            f"dependency audit blocked the run: {result.gates['audit'].get('detail')}"
+        )
         result.stage = "audit_gate"
         result.passed = False
         result.error = f"audit gate failed: {result.gates['audit'].get('detail')}"
         return False
-    if result.gates["audit"].get("status") == "unavailable":
-        result.log.append(
-            f"dependency audit unavailable (warning): {result.gates['audit'].get('detail')}"
-        )
-    # pass / no_manifest proceed silently.
 
     # 2. Coverage delta gate. Skipped entirely (a log line, not a pass) when
     #    the diff vs base adds no python lines -- nothing new to measure.

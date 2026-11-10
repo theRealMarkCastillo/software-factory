@@ -42,6 +42,16 @@ The subject project can use any environment manager. Python environment audits
 read installed distributions from `lib/python*/site-packages`; the target
 environment does not need pip. The factory environment provides `pip-audit`.
 
+The audit gate is fail-closed: it passes only on a readable, internally
+consistent pip-audit report with at least one audited dependency and no
+unexpected skipped dependency. Tool errors, empty or malformed output, timeouts
+and exit-code/report contradictions block the run. Lock files (`uv.lock`,
+`poetry.lock`, `Pipfile.lock`) are converted to a fully pinned requirement set
+and audited without re-resolution; a `pyproject.toml` without a lock, or an
+unpinned `requirements.txt`, fails closed with an actionable reason until you
+commit a deterministic input. When an environment is audited beside a
+`uv.lock`, installed versions must match the lock (`uv sync --frozen`).
+
 ```sh
 uv run --locked factory-run \
   --card task-123 \

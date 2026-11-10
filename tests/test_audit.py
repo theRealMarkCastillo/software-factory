@@ -1,6 +1,11 @@
 """Unit tests for factory.audit. Mock subprocess so tests are deterministic
 (no network, no real pip-audit dependency), matching the user's preference
-for synthetic fixture tests before live-system runs."""
+for synthetic fixture tests before live-system runs.
+
+These cover the historical branch layout; ``test_audit_fail_closed.py`` covers
+the fail-closed contract (supported argv, report validation, skip accounting,
+lock conversion and exit-code consistency).
+"""
 
 import json
 import sys
@@ -21,7 +26,7 @@ class FakeProc:
 
 
 def make_pip_env_payload(vulns):
-    deps = []
+    deps = [{"name": "requests", "version": "2.32.0", "vulns": []}]
     if vulns:
         deps.append(
             {
@@ -53,12 +58,12 @@ def _repo_with(tmp_path, files):
     return repo
 
 
-def test_no_repo_path_returns_unavailable(tmp_path):
+def test_no_repo_path_returns_invalid(tmp_path):
     r = audit.run_dependency_audit(str(tmp_path / "nonexistent"), "python")
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
 
 
-def test_no_manifest_and_no_venv_returns_unavailable(tmp_path):
+def test_no_manifest_and_no_venv_returns_no_manifest(tmp_path):
     repo = _repo_with(tmp_path, {})
     r = audit.run_dependency_audit(str(repo), "python", "")
     assert r.status == "no_manifest"
@@ -89,6 +94,7 @@ def test_python_env_scan_reports_pass_when_clean(tmp_path, monkeypatch):
     )
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
     assert r.status == "pass"
+    assert r.audited == 1
 
 
 @pytest.mark.parametrize("vulnerable", [False, True])
@@ -116,7 +122,7 @@ def test_pip_free_environment_is_audited(tmp_path, monkeypatch, vulnerable):
     assert len(calls) == 1
 
 
-def test_environment_without_site_packages_reports_unavailable(tmp_path, monkeypatch):
+def test_environment_without_site_packages_is_blocking(tmp_path, monkeypatch):
     venv = tmp_path / "broken-venv"
     (venv / "lib").mkdir(parents=True)
     repo = _repo_with(tmp_path, {})
@@ -127,11 +133,11 @@ def test_environment_without_site_packages_reports_unavailable(tmp_path, monkeyp
 
     monkeypatch.setattr(audit.subprocess, "run", unexpected_scan)
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
     assert "no site-packages" in r.detail
 
 
-def test_missing_pip_audit_binary_reports_unavailable(tmp_path, monkeypatch):
+def test_missing_pip_audit_binary_is_blocking(tmp_path, monkeypatch):
     # No FACTORY_PIP_AUDIT, nothing in the engine interpreter environment,
     # nothing on an isolated PATH, and no historical Hermes venv.
     venv = _tmp_venv(tmp_path)
@@ -144,12 +150,12 @@ def test_missing_pip_audit_binary_reports_unavailable(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(empty))
     monkeypatch.setenv("HOME", str(empty / "home"))
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
     assert "not found" in r.detail
 
 
 def test_manifest_scan_flags_vulnerable_pin(tmp_path, monkeypatch):
-    # requirements.txt with an old vulnerable pin; _run_pip_audit used.
+    # Fully pinned requirements.txt; the pinned set is converted and audited.
     repo = _repo_with(tmp_path, {"requirements.txt": "pytest==7.4.4\n"})
     monkeypatch.setenv("FACTORY_PIP_AUDIT", "/fake/pip-audit")
     monkeypatch.setattr(
@@ -162,8 +168,8 @@ def test_manifest_scan_flags_vulnerable_pin(tmp_path, monkeypatch):
     assert r.status == "fail"
 
 
-def test_audit_unavailable_map_to_warning_not_fail(tmp_path, monkeypatch):
-    # Non-zero return AND unparseable stdout -> "unavailable" (warning tier).
+def test_tool_usage_error_never_passes(tmp_path, monkeypatch):
+    # Non-zero return AND empty stdout -> blocking, never a clean result.
     venv = _tmp_venv(tmp_path)
     repo = _repo_with(tmp_path, {})
     monkeypatch.setenv("FACTORY_PIP_AUDIT", "/fake/pip-audit")
@@ -173,21 +179,21 @@ def test_audit_unavailable_map_to_warning_not_fail(tmp_path, monkeypatch):
         lambda *a, **k: FakeProc(2, stdout="", stderr="registry unreachable"),
     )
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
 
 
-def test_bad_pip_audit_override_reports_unavailable_not_raise(tmp_path, monkeypatch):
+def test_bad_pip_audit_override_reports_invalid_not_raise(tmp_path, monkeypatch):
     """A FACTORY_PIP_AUDIT pointing at a nonexistent binary must be reported,
     not raised -- this module's contract is 'never raises on non-policy'."""
     venv = _tmp_venv(tmp_path)
     repo = _repo_with(tmp_path, {})
     monkeypatch.setenv("FACTORY_PIP_AUDIT", str(tmp_path / "nonexistent-pip-audit"))
     r = audit.run_dependency_audit(str(repo), "python", str(venv))
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
     assert "could not execute" in r.detail
 
 
-def test_npm_missing_reports_unavailable_not_raise(tmp_path, monkeypatch):
+def test_npm_missing_reports_invalid_not_raise(tmp_path, monkeypatch):
     repo = _repo_with(tmp_path, {"package.json": "{}\n"})
 
     def _boom(*a, **k):
@@ -195,7 +201,7 @@ def test_npm_missing_reports_unavailable_not_raise(tmp_path, monkeypatch):
 
     monkeypatch.setattr(audit.subprocess, "run", _boom)
     r = audit.run_dependency_audit(str(repo), "typescript")
-    assert r.status == "unavailable"
+    assert r.status == "invalid"
     assert "could not execute npm" in r.detail
 
 
@@ -238,8 +244,10 @@ def test_audit_cli_module_exits_zero_and_emits_json_on_clean(
     assert data["passed"] is True
 
 
-def test_audit_cli_module_exits_zero_on_warning_tier(tmp_path, capsys, monkeypatch):
-    # unavailable (e.g. offline index) is a WARNING that must not hard-fail the gate.
+def test_audit_cli_module_exits_nonzero_when_it_cannot_attest(
+    tmp_path, capsys, monkeypatch
+):
+    # A tool/index failure is a blocking result now: no warning tier.
     venv = _tmp_venv(tmp_path)
     repo = _repo_with(tmp_path, {})
     monkeypatch.setenv("FACTORY_PIP_AUDIT", "/fake/pip-audit")
@@ -248,10 +256,10 @@ def test_audit_cli_module_exits_zero_on_warning_tier(tmp_path, capsys, monkeypat
         "run",
         lambda *a, **k: FakeProc(2, stdout="", stderr="registry unreachable"),
     )
-    assert audit.main(["--repo", str(repo), "--venv", str(venv)]) == 0
+    assert audit.main(["--repo", str(repo), "--venv", str(venv)]) == 1
     data = json.loads(capsys.readouterr().out)
-    assert data["result"]["status"] == "unavailable"
-    assert data["passed"] is True
+    assert data["result"]["status"] == "invalid"
+    assert data["passed"] is False
 
 
 def test_audit_cli_module_entrypoint_via_runpy(tmp_path, monkeypatch, capsys):

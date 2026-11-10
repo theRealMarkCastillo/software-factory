@@ -266,9 +266,10 @@ GATE_POLICY = {
 ```
 
 - `status in {"fail", "error"}` → `gate_failed:<gate>`.
-- `status in {"unavailable", "unsupported", "disabled"}` → `gate_unavailable:<gate>`;
-  this is the deliberate tightening: the runner still treats an unavailable audit as a
-  warning (unchanged behavior), but such a run can never produce certifiable acceptance.
+- `status in {"unavailable", "unsupported", "disabled"}` → `gate_unavailable:<gate>`.
+  The runner is fail-closed too: only `pass` (or a permitted inapplicable
+  `no_manifest` claim) advances to Docker, so an audit that could not read or
+  verify its report never runs the acceptance container.
 - `"status:reason"` not in the permitted map → `gate_not_applicable_unpermitted:<gate>`
   (no blanket pass/skip; a new legitimate reason requires a code change plus a test).
 - A gate key missing or not an object → `gate_missing:<gate>`.

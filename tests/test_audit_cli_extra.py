@@ -43,7 +43,13 @@ def test_main_clean_repo_outputs_json_and_exits_zero(tmp_path, monkeypatch, caps
 
         class P:
             returncode = 0
-            stdout = json.dumps({"dependencies": []})
+            stdout = json.dumps(
+                {
+                    "dependencies": [
+                        {"name": "requests", "version": "2.32.0", "vulns": []}
+                    ]
+                }
+            )
             stderr = ""
 
         return P()

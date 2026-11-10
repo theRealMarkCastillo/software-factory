@@ -441,11 +441,15 @@ def test_datamodel_gate_exception_fails_closed(tmp_path, monkeypatch):
     assert "data-model gate failed" in result.error
 
 
-def test_audit_unavailable_runs_but_cannot_certify_acceptance(tmp_path, monkeypatch):
+def test_blocking_audit_stops_before_docker(tmp_path, monkeypatch):
     repo, calls = _wired(tmp_path, monkeypatch)
     _gate_results(
         monkeypatch,
-        audit={"status": "unavailable", "passed": False, "detail": "index offline"},
+        audit={
+            "status": "invalid",
+            "passed": False,
+            "detail": "pip-audit produced an unusable report",
+        },
     )
 
     result = runner.run_factory_card(
@@ -453,9 +457,9 @@ def test_audit_unavailable_runs_but_cannot_certify_acceptance(tmp_path, monkeypa
     )
 
     assert result.passed is False
-    assert result.stage == "evidence_enforcement"
-    assert len(calls) == 2  # docker up happened
-    assert any("dependency audit unavailable" in line for line in result.log)
+    assert result.stage == "audit_gate"
+    assert calls == []  # Docker never started for an unverified dependency set
+    assert any("dependency audit blocked" in line for line in result.log)
 
 
 def test_coverage_gate_skipped_when_no_added_python(tmp_path, monkeypatch):
@@ -845,9 +849,8 @@ def test_all_gates_pass_manifest_on_disk_passes_assembled_evidence(
     assert_assembled_evidence(manifest)  # legacy reader still passes read-back
 
 
-@pytest.mark.parametrize("ungated", [True, False])
-def test_real_manifest_preserves_diagnostics_but_rejects_uncertified_runs(
-    tmp_path, monkeypatch, ungated
+def test_real_manifest_preserves_diagnostics_but_rejects_ungated_runs(
+    tmp_path, monkeypatch
 ):
     from factory.evidence import EvidenceError, write_evidence_manifest
 
@@ -855,15 +858,12 @@ def test_real_manifest_preserves_diagnostics_but_rejects_uncertified_runs(
     _wire_successful_run(monkeypatch, tmp_path)
     _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
     monkeypatch.setattr(runner, "write_evidence_manifest", write_evidence_manifest)
-    monkeypatch.setattr(
-        runner, "run_dependency_audit", lambda *a, **k: {"status": "unavailable"}
-    )
     result = runner.run_factory_card(
         "diagnostic",
         str(repo),
         ["compose.yml"],
         artifacts_root=str(tmp_path / "artifacts"),
-        run_gates=not ungated,
+        run_gates=False,
     )
     assert not result.passed
     assert result.stage == "evidence_enforcement"
@@ -873,6 +873,33 @@ def test_real_manifest_preserves_diagnostics_but_rejects_uncertified_runs(
     )
     with pytest.raises(EvidenceError):
         assert_assembled_evidence(manifest)
+
+
+def test_unverified_audit_writes_no_certifying_manifest(tmp_path, monkeypatch):
+    """A gate that cannot attest must stop the run before Docker and before
+    any evidence manifest that could be read as certified."""
+    repo = _git_repo(tmp_path)
+    calls = []
+    _wire_successful_run(monkeypatch, tmp_path)
+    _snapshots(monkeypatch, ProtectedProjectSnapshot(), ProtectedProjectSnapshot())
+    monkeypatch.setattr(
+        runner, "run_dependency_audit", lambda *a, **k: {"status": "invalid"}
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_compose",
+        lambda *a, **k: calls.append(a),
+    )
+    result = runner.run_factory_card(
+        "diagnostic",
+        str(repo),
+        ["compose.yml"],
+        artifacts_root=str(tmp_path / "artifacts"),
+    )
+    assert not result.passed
+    assert result.stage == "audit_gate"
+    assert calls == []
+    assert not (Path(tmp_path / "artifacts") / "evidence-manifest.json").exists()
 
 
 # ---------------------------------------------------------------------------

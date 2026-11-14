@@ -23,6 +23,7 @@ REASON_CODES = frozenset(
         "cancellation_pending",
         "cancelled",
         "budget_exhausted",
+        "not_converging",
         # worker
         "worker_failed",
         "worker_unavailable",

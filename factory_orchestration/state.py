@@ -270,7 +270,10 @@ class RunAssignment:
         }
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.frozen_paths:
+            payload.pop("frozen_paths")
+        return payload
 
 
 class FactoryRunState(TypedDict, total=False):

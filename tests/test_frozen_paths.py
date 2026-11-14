@@ -271,6 +271,13 @@ def test_prompt_and_json_assignment_boundary():
     assert _implementation_prompt({**PROMPT_STATE, "frozen_paths": ()}, 0) == GOLDEN
 
 
+def test_empty_assignment_serialization_preserves_legacy_bytes(tmp_path):
+    s = seed(tmp_path)
+    assert "frozen_paths" not in s["assignment"].as_dict()
+    freeze(s, "tests/")
+    assert s["assignment"].as_dict()["frozen_paths"] == ("tests/",)
+
+
 @pytest.mark.parametrize("as_json", [False, True])
 def test_verify_cli_frozen_reject_pass_and_no_flag_bytes(tmp_path, capsys, as_json):
     s = seed(tmp_path)

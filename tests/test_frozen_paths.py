@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import sys
 import unicodedata
 from dataclasses import replace
 from types import SimpleNamespace
@@ -27,7 +28,13 @@ def candidate(s):
     sha = commit(s["workspace"], "candidate change")
     s["candidate"] = sha
     s["worker"].candidate_sha = sha
-    make_evidence(s["artifacts"], s["repo"], s["base"], sha)
+    make_evidence(
+        s["artifacts"],
+        s["workspace"],
+        s["base"],
+        sha,
+        **({"fixture_paths": []} if (s["workspace"] / "tests").is_file() else {}),
+    )
     return sha
 
 
@@ -74,6 +81,7 @@ def test_changed_paths_reject_before_acceptance_and_feed_repair(tmp_path, change
         git(w, "mv", "app.py", "tests/new.py")
         expected = ["tests/new.py"]
     elif change == "mode":
+        (w / "compose.yml").chmod(0o755)
         git(w, "update-index", "--chmod=+x", "compose.yml")
     elif change == "case":
         # Plumbing preserves case even on case-insensitive filesystems.
@@ -92,8 +100,10 @@ def test_changed_paths_reject_before_acceptance_and_feed_repair(tmp_path, change
         git(w, "reset", "--hard", "HEAD")
         expected = ["Tests/new.py"]
     elif change == "unicode":
+        git(w, "config", "core.precomposeunicode", "false")
         name = unicodedata.normalize("NFD", "caf\u00e9.txt")
         blob = git(w, "rev-parse", "HEAD:app.py")
+        git(w, "rm", "caf\u00e9.txt")
         git(w, "update-index", "--add", "--cacheinfo", f"100644,{blob},{name}")
         git(
             w,
@@ -106,7 +116,7 @@ def test_changed_paths_reject_before_acceptance_and_feed_repair(tmp_path, change
             "unicode",
         )
         git(w, "reset", "--hard", "HEAD")
-        expected = [name]
+        expected = sorted([name, "caf\u00e9.txt"])
     elif change == "type":
         (w / "compose.yml").unlink()
         (w / "compose.yml").symlink_to("app.py")
@@ -129,11 +139,13 @@ def test_changed_paths_reject_before_acceptance_and_feed_repair(tmp_path, change
             "index change",
         )
         sha = git(w, "rev-parse", "HEAD")
+        git(w, "reset", "--hard", "HEAD")
     else:
         sha = commit(w, "candidate")
     s["worker"].candidate_sha = sha
     requests = capture(s)
     result = run(s)
+    assert s["gate"].submissions == []
     assert not list((s["gate"].root / "gate-receipts").glob("*.json"))
     data = context(requests[1])
     assert data["source"] == "bind"
@@ -231,15 +243,7 @@ def test_old_assignment_and_checkpoint_resume_without_frozen_field(tmp_path):
     state = dict(paused.state)
     state.pop("frozen_paths", None)
     assert assignment_from_state(state).frozen_paths == ()
-    # Write a checkpoint with no new field, as a pre-change release did.
-    from factory_orchestration.graph import build_graph
-    from factory_orchestration.runner import _checkpoint_saver
-
-    with _checkpoint_saver(s["deps"].store) as saver:
-        graph = build_graph(s["deps"], saver)
-        config = {"configurable": {"thread_id": paused.thread_id}}
-        # None deletes the optional channel for compatibility simulation.
-        graph.update_state(config, {"frozen_paths": None})
+    assert "frozen_paths" not in paused.state
     result = resume(
         s["deps"],
         paused.thread_id,
@@ -357,3 +361,94 @@ def test_launcher_gate_argv(tmp_path, monkeypatch, paths):
     for path in paths:
         expected += ["--frozen", path]
     assert seen == [expected]
+
+
+def test_nonempty_frozen_paths_survive_checkpoint_resume(tmp_path):
+    s = seed(tmp_path)
+    freeze(s, "tests/")
+    s["worker"].outcomes = ["pending"]
+    paused = run(s)
+    assert tuple(paused.state["frozen_paths"]) == ("tests/",)
+    result = resume(
+        s["deps"],
+        paused.thread_id,
+        s["attempt"],
+        payload={
+            "receipt": {
+                "operation_key": paused.awaiting["operation_key"],
+                "session_id": "fixture",
+                "outcome": "completed",
+                "candidate_sha": s["candidate"],
+            }
+        },
+        resolved_hold="worker finished",
+    )
+    assert result.status == "ready_for_authorized_completion"
+    assert assignment_from_state(result.state).frozen_paths == ("tests/",)
+
+
+def test_bounded_path_detail_and_full_set_signature(tmp_path):
+    s = seed(tmp_path)
+    freeze(s, "tests/")
+    requests = capture(s)
+    original = s["worker"].submit
+
+    def submit(request):
+        directory = s["workspace"] / "tests"
+        for i in range(25):
+            (directory / f"f{i:02}.txt").write_text("changed")
+        # Only the path beyond the first 20 differs on each failure. It must
+        # still affect convergence; do not hash the truncated detail.
+        for path in directory.glob("z*.txt"):
+            path.unlink()
+        (directory / f"z{request.repair_index}.txt").write_text("changed")
+        s["worker"].candidate_sha = commit(s["workspace"], "attempt")
+        return original(request)
+
+    s["worker"].submit = submit
+    result = run(s)
+    assert len(requests) == 3
+    assert result.state["last_reason_code"] == "budget_exhausted"
+    detail = json.loads(context(requests[1])["detail"])
+    assert detail == [f"tests/f{i:02}.txt" for i in range(20)] + [{"omitted_count": 6}]
+    assert s["gate"].submissions == []
+
+
+def test_nul_diff_names_are_json_data_not_lines(tmp_path):
+    s = seed(tmp_path)
+    freeze(s, "tests/")
+    name = 'tests/quoted"\nline.py'
+    (s["workspace"] / name).write_text("changed")
+    candidate(s)
+    requests = capture(s)
+    run(s)
+    assert json.loads(context(requests[1])["detail"]) == [name]
+    assert s["gate"].submissions == []
+
+
+def test_verify_shipped_module_entrypoint(tmp_path):
+    s = seed(tmp_path)
+    args = [
+        sys.executable,
+        "-m",
+        "factory.verify",
+        "--artifacts-dir",
+        str(s["artifacts"]),
+        "--repo",
+        str(s["repo"]),
+        "--base",
+        s["base"],
+        "--candidate",
+        s["candidate"],
+        "--json",
+    ]
+    passed = subprocess.run(
+        args + ["--frozen", "tests/"], capture_output=True, text=True
+    )
+    assert passed.returncode == 0, passed.stderr
+    assert json.loads(passed.stdout)["ok"] is True
+    rejected = subprocess.run(
+        args + ["--frozen", "app.py"], capture_output=True, text=True
+    )
+    assert rejected.returncode == 1, rejected.stderr
+    assert json.loads(rejected.stdout)["reason"] == "frozen_path_modified"

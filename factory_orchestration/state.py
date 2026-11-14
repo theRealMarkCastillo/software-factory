@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, TypedDict
 
+from factory.frozen import validate_base, validate_paths
+
 from .errors import OrchestrationError
 
 GRAPH_VERSION = "factory-card/v1"
@@ -148,6 +150,7 @@ class RunAssignment:
     max_repairs: int = MAX_REPAIRS_PILOT
     cost_budget: str = "unknown"
     entire_references: tuple[str, ...] = ()
+    frozen_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require(
@@ -177,6 +180,11 @@ class RunAssignment:
             "workspace_path must differ from the subject repository root",
         )
         _full_sha(self.immutable_base_sha, "immutable_base_sha")
+        try:
+            validate_paths(self.frozen_paths)
+            validate_base(self.repository, self.immutable_base_sha, self.frozen_paths)
+        except (ValueError, OSError) as exc:
+            raise OrchestrationError("invalid_assignment", str(exc)) from exc
         _require(
             isinstance(self.spec_digest, str)
             and bool(_DIGEST_RE.match(self.spec_digest)),
@@ -258,6 +266,7 @@ class RunAssignment:
             "max_repairs": self.max_repairs,
             "engine_fingerprint": self.engine_fingerprint,
             "host_policy_digest": self.host_policy_digest,
+            **({"frozen_paths": self.frozen_paths} if self.frozen_paths else {}),
         }
 
     def as_dict(self) -> dict:
@@ -284,6 +293,7 @@ class FactoryRunState(TypedDict, total=False):
     workspace_path: str
     immutable_base_sha: str
     candidate_sha: str
+    frozen_paths: tuple[str, ...]
     acceptance_argv: tuple[str, ...]
     acceptance_artifacts: str
     engine_release_reference: str
@@ -360,6 +370,9 @@ def initial_state(
         last_reason_detail="",
         cancellation_requested=False,
         route="continue",
+        **(
+            {"frozen_paths": assignment.frozen_paths} if assignment.frozen_paths else {}
+        ),
     )
 
 

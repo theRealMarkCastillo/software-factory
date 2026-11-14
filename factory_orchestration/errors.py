@@ -31,6 +31,7 @@ REASON_CODES = frozenset(
         "effect_unknown",
         # gates and review
         "evidence_rejected",
+        "frozen_path_modified",
         "review_changes",
         "review_inconclusive",
         "review_scope_violation",

@@ -35,6 +35,33 @@ A wait is persisted state: `await_worker` and `await_review` raise a LangGraph
 inside a currently authorized Hermes attempt; there is no sleeping subprocess
 and no admission daemon.
 
+## Frozen paths
+
+`RunAssignment.frozen_paths: tuple[str, ...] = ()` is optional, persisted when
+non-empty, and rebuilt on resume. Older assignments/checkpoints without it
+retain their behavior without migration. Entries are literal POSIX repository
+paths (file, or directory with trailing `/`), never globs; syntax and normalized
+duplicates are rejected as `invalid_assignment` before effects. At most 200
+entries are accepted. Admission reads the immutable base using `git ls-tree`:
+a file must be a blob, a directory must have a tracked blob beneath it.
+
+After its existing checks, `bind_candidate` reads the NUL-delimited base-to-
+candidate diff with `--no-renames`. A changed file equal to a frozen file, or
+under a frozen directory, using Unicode NFC then case folding, routes to repair
+as `frozen_path_modified` without acceptance. Repair context source is `bind`;
+detail is a JSON array of sorted offending paths (first 20, followed by
+`{"omitted_count": N}` when truncated), through the existing redaction/byte bounds.
+The convergence signature hashes the reason and **complete** sorted path set,
+not a truncated excerpt or normalized diagnostic. Normal repair budget and
+`not_converging` rules apply. Verification independently receives every declared
+path as a repeatable `--frozen` argument to the installed launcher. With none,
+launcher argv and worker prompts are unchanged; otherwise the worker gets a
+data-only JSON array identifying paths it must not modify.
+
+Out of scope: unlisted influencing files (for example a new root `conftest.py`,
+an unlisted Compose override, or `.gitattributes` filters) and OS-level workspace
+write protection. The spec author owns the complete declaration.
+
 ## State schema
 
 `factory_orchestration/state.py` defines `FactoryRunState` (`FactoryRun v1`,

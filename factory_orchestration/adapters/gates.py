@@ -59,6 +59,7 @@ class InstalledLauncherGate:
         repository: str,
         candidate_sha: str,
         base_sha: str,
+        frozen_paths: tuple[str, ...] = (),
     ) -> VerifyOutcome:
         from ..evidence_guard import manifest_guard
 
@@ -82,6 +83,8 @@ class InstalledLauncherGate:
             base_sha,
             "--json",
         ]
+        for path in frozen_paths:
+            argv.extend(("--frozen", path))
         try:
             completed = subprocess.run(
                 argv,

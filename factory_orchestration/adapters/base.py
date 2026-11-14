@@ -125,6 +125,7 @@ class GateAdapter(Protocol):
         repository: str,
         candidate_sha: str,
         base_sha: str,
+        frozen_paths: tuple[str, ...] = (),
     ) -> VerifyOutcome: ...
 
     def probe(self, operation_key: str) -> EffectProbe: ...

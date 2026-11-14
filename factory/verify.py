@@ -19,6 +19,7 @@ import json
 import sys
 
 from factory.evidence import FULL_SHA_RE, VerificationResult, verify_evidence
+from factory.frozen import offending_paths, validate_paths, violation_detail
 
 TRUST_BOUNDARY = """\
 Trust boundary (stated, not hidden):
@@ -57,6 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--candidate", required=True, help="full 40-hex candidate commit SHA"
     )
     parser.add_argument("--base", required=True, help="full 40-hex base commit SHA")
+    parser.add_argument(
+        "--frozen",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="literal frozen file or directory (trailing /); repeatable",
+    )
     parser.add_argument(
         "--json", action="store_true", dest="as_json", help="machine-readable output"
     )
@@ -97,7 +105,32 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
+    paths = tuple(args.frozen)
+    try:
+        validate_paths(paths)
+    except ValueError as exc:
+        print(f"factory-verify: error: {exc}", file=sys.stderr)
+        return 2
     result = verify_evidence(args.artifacts_dir, args.repo, args.candidate, args.base)
+    if paths:
+        try:
+            violations = offending_paths(args.repo, args.base, args.candidate, paths)
+        except (ValueError, OSError) as exc:
+            result = VerificationResult(
+                False, "invalid_argument", str(exc), args.candidate, args.base
+            )
+        else:
+            if violations:
+                result.ok = False
+                result.reason = "frozen_path_modified"
+                result.detail = violation_detail(violations)
+                result.checks.append(
+                    {
+                        "name": "frozen_paths",
+                        "ok": False,
+                        "reason": "frozen_path_modified",
+                    }
+                )
     if result.reason == "invalid_argument":
         print(f"factory-verify: error: {result.detail}", file=sys.stderr)
         return 2

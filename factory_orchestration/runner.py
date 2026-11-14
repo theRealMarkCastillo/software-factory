@@ -374,6 +374,7 @@ def assignment_from_state(state: dict) -> RunAssignment:
         host_policy_digest=state["host_policy_digest"],
         max_repairs=int(state["max_repairs"]),
         cost_budget=state.get("cost_budget", "unknown"),
+        frozen_paths=tuple(state.get("frozen_paths") or ()),
     )
 
 

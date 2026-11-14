@@ -250,8 +250,10 @@ class FakeGate:
         repository: str,
         candidate_sha: str,
         base_sha: str,
+        frozen_paths: tuple[str, ...] = (),
     ) -> VerifyOutcome:
         from factory.evidence import verify_evidence
+        from factory.frozen import offending_paths, violation_detail
 
         from ..evidence_guard import manifest_guard
 
@@ -263,6 +265,11 @@ class FakeGate:
                 detail="manifest byte guard rejected the evidence before verification",
             )
         result = verify_evidence(artifacts, repository, candidate_sha, base_sha)
+        violations = offending_paths(repository, base_sha, candidate_sha, frozen_paths)
+        if violations:
+            return VerifyOutcome(
+                False, "frozen_path_modified", violation_detail(violations)
+            )
         return VerifyOutcome(
             certified=bool(result.ok),
             reason=result.reason,

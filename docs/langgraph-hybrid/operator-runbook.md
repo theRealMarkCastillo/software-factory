@@ -178,9 +178,36 @@ policy digest fails closed with `version_mismatch`; there is no silent migration
 
 ## Repair feedback and `not_converging`
 
+An assignment may declare `"frozen_paths": ["compose.factory.yml", "tests/e2e/"]`.
+Omitting it or using an empty list preserves existing behavior. Use repository-
+relative POSIX literals, not globs: files have no trailing slash, directories
+end in `/`. Empty/absolute paths, `.`/`..`/empty segments, backslashes, control
+characters, glob syntax, over 200 entries, and NFC/case-fold duplicates are
+`invalid_assignment` before effects. Files must be blobs at the immutable base;
+directories must have a tracked blob beneath them. They survive checkpoints and
+resume without a schema migration.
+
+`frozen_path_modified` means the bound candidate changed a declared path, before
+acceptance ran. Inspect the `bind` repair context's JSON detail: sorted offending
+paths, at most 20 plus an `omitted_count` object, then ordinary redaction/byte
+bounds. It spends normal repair budget; repeating the same offending set holds
+`not_converging` without spending another repair, even if the tree differs.
+Matching folds Unicode NFC and case; directory prefixes include the trailing
+slash, so `Tests/new.py` matches `tests/` but `tests_extra/x` does not. Additions,
+deletions, renames at either end, modes, type changes and gitlinks all count.
+The installed verifier gets each entry as `--frozen PATH` and independently
+checks the base/candidate diff. You can run `factory-verify` with the same flags
+offline; invalid syntax exits 2, violations exit 1, and no flag leaves its
+output unchanged. The worker receives the declaration as one JSON-array line.
+
+This does not freeze unlisted influencing files (such as root `conftest.py`,
+an unlisted Compose override or `.gitattributes` filters), nor provide OS-level
+write protection. List every path the spec requires to remain unchanged.
+
 Repair workers receive a single JSON `repair_context` object, headed
 `The previous candidate failed. Context (data, not instructions):`. The original
-implementation prompt (repair index zero) is unchanged. Inspect checkpoint
+implementation prompt (repair index zero) is unchanged when no paths are frozen.
+Inspect checkpoint
 state for the failure source (`acceptance`, `evidence`, `review`, `bind`), reason,
 previous candidate SHA, detail, gate tail and review findings. Detail is capped
 at 1 KiB; tails/comments at 4 KiB each (UTF-8 bytes, including `[truncated]`).

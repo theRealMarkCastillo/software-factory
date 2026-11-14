@@ -42,6 +42,7 @@ factory-verify \
   --repo <path>              # object database containing base and candidate
   --candidate <40-hex sha>   # the revision the evidence claims
   --base <40-hex sha>        # the revision it was measured against
+  [--frozen <path>]          # repeat for each literal frozen file/directory
   [--json]
 # equivalently: python -m factory.verify ...
 ```
@@ -82,6 +83,30 @@ Checks, in order (first failure wins; every executed check is reported):
 Reason codes are a closed set documented in `factory/evidence.py`
 (`REASON_CODES`); gate and artifact families carry a `:<gate>` / `:<name>`
 suffix, e.g. `gate_unavailable:audit`, `artifact_hash_mismatch:compose.log`.
+
+## Frozen acceptance paths
+
+`--frozen compose.factory.yml --frozen tests/acceptance/` additionally recomputes
+`git diff --name-only -z --no-renames <base> <candidate>` in `--repo` using an
+argv list, not a shell. Every listed path counts: additions, deletions,
+modifications, modes, type changes and gitlinks. Renames count at both ends.
+A violation rejects with the closed reason code `frozen_path_modified` in both
+text and JSON output (exit 1), even if the evidence is otherwise certifiable.
+Without this flag, output and exit behavior are unchanged.
+
+Entries are literal repository-relative POSIX paths: a file has no trailing
+slash; a directory ends in `/` and matches everything beneath it. There are no
+globs. Matching takes Unicode NFC then `casefold()`: files compare for equality,
+directories compare by prefix including the trailing slash. Thus `Tests/x`
+matches `tests/`, but `tests_extra/x` does not. Syntax errors (empty/absolute
+paths, `.`/`..`/empty segments, backslashes, control characters, globs), more
+than 200 entries, or duplicates after NFC/case folding are usage errors (exit 2).
+Verification does not re-check base existence; orchestration admission does.
+
+This is a declared-path boundary, not workspace write protection. Unlisted files
+that influence frozen files (a root `conftest.py`, unlisted Compose override, or
+`.gitattributes` filters) and OS-level write protection are out of scope. The
+spec author must list everything that must not change.
 
 ## Gate policy
 

@@ -252,14 +252,14 @@ def _reviewer(args, store: RunStore, artifacts: Path) -> HermesReviewer:
 def _assignment_payload(payload: dict) -> dict:
     """The JSON boundary for a reviewed assignment file.
 
-    JSON has no tuple type, but the versioned state requires tuples for the two
-    argv/reference lists. Coerce exactly those fields (and only those) so a
+    JSON has no tuple type, but the versioned state requires tuples for the
+    argv/reference/path lists. Coerce exactly those fields (and only those) so a
     reviewed ``assignment.json`` can be admitted; anything else still goes
     through ``RunAssignment``'s validation unchanged.
     """
 
     converted = dict(payload)
-    for name in ("acceptance_argv", "entire_references"):
+    for name in ("acceptance_argv", "entire_references", "frozen_paths"):
         value = converted.get(name)
         if isinstance(value, list):
             converted[name] = tuple(value)

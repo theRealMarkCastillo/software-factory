@@ -95,6 +95,7 @@ REASON_CODES = frozenset(
         "ok",
         # inputs
         "invalid_argument",
+        "frozen_path_modified",
         "artifacts_dir_invalid",
         "repo_invalid",
         # manifest bytes

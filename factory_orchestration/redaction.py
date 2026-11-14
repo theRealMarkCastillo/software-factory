@@ -29,11 +29,14 @@ _SHAPES = (
 
 
 def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
-    """Redact exact env values (longest first), then the fixed token shapes.
+    """Redact exact env values and the fixed token shapes in one pass.
 
-    Read the live process environment on each call, without logging it. Provider
-    name sets are imported lazily to avoid a dependency cycle through errors.
-    A single substitution pass prevents replacements from changing other markers.
+    Every rule is matched against the ORIGINAL text; the matched spans are then
+    merged and replaced together. No rule ever sees another rule's output, so a
+    replacement cannot hide a shape (for example an environment value that
+    occurs inside a PEM delimiter) or leave a fragment of an overlapping match.
+    The live process environment is read on each call and never logged.
+    Provider name sets are imported lazily to avoid a dependency cycle.
     """
     from .adapters.hermes import PROVIDER_ENV, REVIEW_PROVIDER_KEYS
 
@@ -44,26 +47,53 @@ def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
     for name, value in sorted(os.environ.items()):
         if len(value) >= 8 and (_ENV_NAME.search(name) or name in provider_names):
             values.setdefault(value, name)
+
+    # (start, end, label); earlier entries win the label of a merged span.
+    spans: list[tuple[int, int, str]] = []
+    pem_spans = []
+    for label, pattern in _SHAPES:
+        for match in pattern.finditer(text):
+            begin = match.end(1) if label == "bearer" else match.start()
+            spans.append((begin, match.end(), label))
+            if label == "pem":
+                pem_spans.append((begin, match.end()))
+    if cut_window:
+        # An END line outside every complete block belongs to a BEGIN that lies
+        # before the readable window: everything up to it is key material.
+        orphan_ends = [
+            match.end()
+            for match in re.finditer(
+                r"^-----END [A-Z ]*PRIVATE KEY-----\r?$", text, re.M
+            )
+            if not any(a <= match.start() < b for a, b in pem_spans)
+        ]
+        if orphan_ends:
+            spans.insert(0, (0, max(orphan_ends), "pem"))
     if values:
         pattern = re.compile(
             "|".join(
                 re.escape(value) for value in sorted(values, key=len, reverse=True)
             )
         )
-        text = pattern.sub(lambda match: f"[REDACTED:{values[match.group()]}]", text)
-    for label, pattern in _SHAPES:
-        text = pattern.sub(
-            lambda match, label=label: (
-                (match.group(1) if label == "bearer" else "") + f"[REDACTED:{label}]"
-            ),
-            text,
-        )
-    if cut_window:
-        # Complete PEM blocks are already gone. An END line left in a cut
-        # window therefore belongs to a BEGIN outside the readable window.
-        orphan_ends = list(
-            re.finditer(r"^-----END [A-Z ]*PRIVATE KEY-----\r?$", text, re.M)
-        )
-        if orphan_ends:
-            text = "[REDACTED:pem]" + text[orphan_ends[-1].end() :]
-    return text
+        for match in pattern.finditer(text):
+            spans.append((match.start(), match.end(), values[match.group()]))
+    if not spans:
+        return text
+
+    order = {id(span): index for index, span in enumerate(spans)}
+    merged: list[list] = []
+    for span in sorted(spans, key=lambda item: (item[0], -item[1])):
+        if merged and span[0] < merged[-1][1]:
+            last = merged[-1]
+            last[1] = max(last[1], span[1])
+            if order[id(span)] < last[3]:
+                last[2], last[3] = span[2], order[id(span)]
+        else:
+            merged.append([span[0], span[1], span[2], order[id(span)]])
+    parts, cursor = [], 0
+    for begin, end, label, _ in merged:
+        parts.append(text[cursor:begin])
+        parts.append(f"[REDACTED:{label}]")
+        cursor = end
+    parts.append(text[cursor:])
+    return "".join(parts)

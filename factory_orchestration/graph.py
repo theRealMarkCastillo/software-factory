@@ -418,12 +418,16 @@ def _failure_signature(context: dict) -> str:
             context.get("review_comment") or context.get("detail") or "",
         )
         identity = redact_diagnostic(identity)
+        # Exactly four volatile kinds are cosmetic: full ISO-8601 timestamps
+        # (a valid date AND time), durations, 0x addresses and long hex runs.
+        # Bare dates, bare clocks and impossible values stay semantic.
         identity = re.sub(
-            r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?",
+            r"\b\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])[T ]"
+            r"(?:[01]\d|2[0-3]):[0-5]\d:(?:[0-5]\d|60)(?:\.\d+)?"
+            r"(?:Z|[+-]\d{2}:?\d{2})?(?![\d:])",
             "",
             identity,
         )
-        identity = re.sub(r"\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b", "", identity)
         identity = re.sub(r"\b(?:0x[0-9a-fA-F]+|[0-9a-fA-F]{12,})\b", "", identity)
         identity = re.sub(
             r"\b(?:in\s+)?\d+(?:\.\d+)?\s*(?:ms|s|seconds?)\b", "", identity

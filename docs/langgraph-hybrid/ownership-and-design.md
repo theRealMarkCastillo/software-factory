@@ -71,6 +71,10 @@ and hold detail), and prompt rendering, `redact_diagnostic` applies two rules:
   names matching `(?i)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)`, plus
   `PROVIDER_ENV` and all `REVIEW_PROVIDER_KEYS` names in `adapters/hermes.py`.
   Longest values match first; replacements are `[REDACTED:<NAME>]`.
+  Both rules are matched against the original text and overlapping matches
+  are merged into one replacement, so one rule's output can never hide another
+  rule's match (an environment value inside a PEM delimiter still redacts the
+  whole block).
 - **R-shape:** `sk-[A-Za-z0-9_-]{20,}` (`openai`),
   `gh[pousr]_[A-Za-z0-9]{30,}` or `github_pat_[A-Za-z0-9_]{30,}` (`github`),
   `AKIA[0-9A-Z]{16}` (`aws`), `AIza[0-9A-Za-z_-]{35}` (`google`),
@@ -151,7 +155,8 @@ retry.
   the first ` - ` separator (or end of line) is the complete pytest node
   id, used verbatim, including parameter spaces, hex and timestamps. Only if
   no such line exists is the first non-empty error line (or detail/review
-  findings) used, normalizing whitespace, ISO timestamps, durations (including
+  findings) used, normalizing whitespace, full ISO-8601 timestamps (a valid date and time;
+  bare dates, bare clocks and impossible values stay semantic), durations (including
   `in 3.4s`), `0x` addresses and bare hex runs of 12+ characters. Text is redacted
   before hashing. A matching non-empty tree or matching signature holds
   `not_converging` before incrementing the repair counter; detail names the

@@ -36,7 +36,8 @@ def _redaction_spans(text: str, *, cut_window: bool = False) -> list[tuple]:
     replacement cannot hide a shape (an environment value inside a PEM
     delimiter) and overlapping matches cannot leave a fragment. Environment
     values are located one value at a time, including overlapping occurrences
-    of the same or of different values.
+    of the same or of different values; shapes are located at every start
+    offset, including matches nested in or crossing another match.
     """
     from .adapters.hermes import PROVIDER_ENV, REVIEW_PROVIDER_KEYS
 
@@ -52,11 +53,21 @@ def _redaction_spans(text: str, *, cut_window: bool = False) -> list[tuple]:
     found: list[tuple[int, int, str]] = []
     pem_spans = []
     for label, pattern in _SHAPES:
-        for match in pattern.finditer(text):
+        # Every start offset that matches contributes, not only the
+        # non-overlapping matches ``finditer`` yields: a block nested inside or
+        # crossing another one is still a match of the original text.
+        position = 0
+        while position <= len(text):
+            match = pattern.search(text, position)
+            if match is None:
+                break
             begin = match.end(1) if label == "bearer" else match.start()
             found.append((begin, match.end(), label))
             if label == "pem":
                 pem_spans.append((begin, match.end()))
+            if match.end() >= len(text):
+                break  # later starts of this shape lie inside this span
+            position = match.start() + 1
     if cut_window:
         # An END line outside every complete block belongs to a BEGIN that lies
         # before the readable window: everything up to it is key material.

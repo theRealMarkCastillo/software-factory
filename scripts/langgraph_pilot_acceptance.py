@@ -27,7 +27,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-LAUNCHER = Path("~/software-factory-ops/bin/factory")
+LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
 CARD = "t_1a2b3c4d"
 BASE_CARD = "t_lgaccept"
 

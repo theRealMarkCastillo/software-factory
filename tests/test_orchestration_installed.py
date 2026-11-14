@@ -20,7 +20,7 @@ from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.graph import thread_id
 from factory_orchestration.runner import cancel, drive, inspect_run, next_action
 
-LAUNCHER = "~/software-factory-ops/bin/factory"
+LAUNCHER = "~/git/software-factory-ops/bin/factory"
 
 
 def _release():

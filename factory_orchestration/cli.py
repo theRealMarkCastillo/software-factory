@@ -28,7 +28,7 @@ from .runner import cancel, drive, export_run, inspect_run, resume, write_export
 from .state import Attempt, RunAssignment
 from .store import AdmissionPolicy, RunStore
 
-DEFAULT_LAUNCHER = Path("~/software-factory-ops/bin/factory")
+DEFAULT_LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
 
 
 def _add_review_options(parser: argparse.ArgumentParser) -> None:

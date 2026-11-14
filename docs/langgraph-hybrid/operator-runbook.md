@@ -75,7 +75,7 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration run \
   "template_id": "bounded-card-v1",
   "worker_profile": "factory-runner",
   "reviewer_profile": "factory-qa",
-  "acceptance_argv": ["~/software-factory-ops/bin/factory", "run", "..."],
+  "acceptance_argv": ["~/git/software-factory-ops/bin/factory", "run", "..."],
   "acceptance_artifacts": "/abs/artifacts",
   "engine_release_reference": "installed:/path@sha256:...",
   "engine_fingerprint": "sha256:<64 hex>",

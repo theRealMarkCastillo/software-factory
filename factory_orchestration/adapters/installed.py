@@ -76,7 +76,7 @@ class InstalledRelease:
 
 
 def discover(
-    ops_root: str | Path = "~/software-factory-ops",
+    ops_root: str | Path = "~/git/software-factory-ops",
 ) -> InstalledRelease:
     root = Path(ops_root).expanduser().resolve()
     launcher = root / "bin" / "factory"

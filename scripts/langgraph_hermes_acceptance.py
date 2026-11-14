@@ -56,7 +56,7 @@ from factory_orchestration.runner import drive, inspect_run  # noqa: E402
 from factory_orchestration.state import Attempt, RunAssignment  # noqa: E402
 from factory_orchestration.store import RunStore  # noqa: E402
 
-LAUNCHER = Path("~/software-factory-ops/bin/factory")
+LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
 CARD = "t_1a2b3c4d"
 PREFLIGHT_KEY = "factory-preflight-token"
 

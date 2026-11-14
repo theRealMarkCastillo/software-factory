@@ -255,24 +255,70 @@ def capture_source(repo_path: str | Path) -> dict:
     repo = Path(repo_path).expanduser().resolve()
     try:
         sha = _run_git(repo, ["rev-parse", "HEAD"])
-        status = _run_git(repo, ["status", "--short"])
+        status = _run_git(repo, ["status", "--short", "--", "."])
     except EvidenceError:
         return {"sha": "", "status_porcelain": ""}
     return {"sha": sha, "status_porcelain": status}
 
 
 def resolve_base_info(repo_path: str | Path, ref: str) -> dict:
-    """Resolve the diff base to an immutable commit SHA before gates run.
+    """Resolve the closed base grammar once, without Git's DWIM precedence.
 
-    Returns ``{"ref", "kind", "sha"}``. ``kind`` is ``"commit"`` when the ref
-    resolves, otherwise ``"unresolved"`` with an empty SHA -- a run that cannot
-    name its measured base cannot certify.
+    Successful results retain the evidence shape ``{ref, kind, sha}``. Failed
+    results carry an error code, and collisions name every exact alternative.
+    Only HEAD and validated exact refs may peel annotated tags to commits;
+    a raw object ID must itself name a commit.
     """
     repo = Path(repo_path).expanduser().resolve()
-    proc = _git(repo, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+    unresolved = {"ref": ref, "kind": "unresolved", "sha": ""}
+
+    def failure(code: str, alternatives: list[str] | None = None) -> dict:
+        return {**unresolved, "error": code, "alternatives": alternatives or []}
+
+    if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+        target = ref.lower()
+        obj = _git(repo, ["cat-file", "-t", target])
+        if obj.returncode != 0 or obj.stdout.strip() != "commit":
+            return failure("base_not_found")
+    elif ref == "HEAD":
+        target = ref
+    else:
+        if (
+            not ref
+            or ref.startswith("-")
+            or any(c.isspace() for c in ref)
+            or any(token in ref for token in ("~", "^", ":", "@{", "..", "\\"))
+            or re.fullmatch(r"[0-9a-fA-F]+", ref)
+        ):
+            return failure("unsupported_base")
+        candidates = (
+            [ref]
+            if ref.startswith("refs/")
+            else [
+                f"refs/{namespace}/{ref}" for namespace in ("heads", "tags", "remotes")
+            ]
+        )
+        if any(
+            _git(repo, ["check-ref-format", candidate]).returncode != 0
+            for candidate in candidates
+        ):
+            return failure("unsupported_base")
+        matches = []
+        for candidate in candidates:
+            proc = _git(repo, ["show-ref", "--verify", "--hash", candidate])
+            if proc.returncode == 0:
+                matches.append((candidate, proc.stdout.strip()))
+        if len(matches) > 1:
+            return failure("ambiguous_base", [name for name, _ in matches])
+        if not matches:
+            return failure("base_not_found")
+        # Peel the captured object, not the mutable ref a second time.
+        target = matches[0][1]
+
+    proc = _git(repo, ["rev-parse", "--verify", "--quiet", f"{target}^{{commit}}"])
     sha = proc.stdout.strip() if proc.returncode == 0 else ""
-    if not FULL_SHA_RE.match(sha):
-        return {"ref": ref, "kind": "unresolved", "sha": ""}
+    if not FULL_SHA_RE.fullmatch(sha):
+        return failure("base_not_found")
     return {"ref": ref, "kind": "commit", "sha": sha}
 
 
@@ -334,17 +380,18 @@ def _environment_snapshot(repo: Path, env_file: str) -> dict:
 
     The reviewer sees this manifest under ``/evidence/candidate``; a host
     absolute path here would name a path the reviewer is forbidden (and unable)
-    to use. Keep the record repo-relative and state its origin; the manifest
-    digest bound in the run receipt still proves which host file was hashed.
+    to use. Keep repository records relative, and external records path-free;
+    hashes bind the file contents without exposing host paths or values.
     """
 
     path = (repo / env_file).resolve()
     try:
         relative = path.relative_to(repo.resolve()).as_posix()
-    except ValueError as exc:
-        raise EvidenceError(
-            f"environment file escapes the repository root: {env_file}"
-        ) from exc
+    except ValueError:
+        record = {"location": "external"}
+        if path.is_file():
+            record["sha256"] = _sha256(path)
+        return record
     record = {
         "path": relative,
         "path_rel": relative,

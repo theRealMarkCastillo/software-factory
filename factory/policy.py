@@ -1190,9 +1190,8 @@ def _parse_port_allowlist(value: str) -> list[int]:
 def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
     """
     Allocate `n` free host TCP ports for a factory test that genuinely
-    requires a published port. Lock-guarded (advisory atomic-file lock, per
-    the reconciling convention from build-host-2's runner) so concurrent
-    factory runs never hand out the same host port. Verifies against BOTH
+    requires a published port. Lock-guarded (advisory atomic-file lock) so
+    concurrent factory runs never hand out the same host port. Verifies against BOTH
     live host bindings (lsof) AND docker port mappings AND the reserved set.
 
     avoid:
@@ -1233,12 +1232,11 @@ def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
 
 # Where this factory hands out ephemeral test ports. Deliberately a compact,
 # easy-to-grep range distinct from both the OS ephemeral range and the
-# protected projects' low ports, matching the build-host-2 convention. Change
+# protected projects' low ports. Change
 # both constant lines together if you need a different span.
 FACTORY_PORT_RANGE_START = 49000
 FACTORY_PORT_RANGE_END = 49151
 
-_PORT_LOCK = Path(__file__).resolve().parent / "ports" / ".lock"
 _PORT_LOCK_STALE_S = 120  # a lock older than this is a crashed process's marker
 
 
@@ -1254,19 +1252,27 @@ def _acquire_port_lock():
 
     @contextlib.contextmanager
     def _lock():
-        _PORT_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        if configured := os.environ.get("FACTORY_STATE_DIR"):
+            state = Path(configured).expanduser()
+        elif xdg := os.environ.get("XDG_STATE_HOME"):
+            state = Path(xdg).expanduser() / "software-factory"
+        else:
+            state = Path.home() / ".local" / "state" / "software-factory"
+        state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        port_lock = state / "ports" / ".lock"
+        port_lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         deadline = time.time() + 60
         fd = None
         while fd is None:
             try:
-                fd = os.open(str(_PORT_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                fd = os.open(str(port_lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
                 try:
-                    stat = _PORT_LOCK.stat()
+                    stat = port_lock.stat()
                     age = time.time() - stat.st_mtime
                     # Steal only a provably stale marker; never break a live lock.
                     if age > _PORT_LOCK_STALE_S:
-                        _PORT_LOCK.unlink(missing_ok=True)
+                        port_lock.unlink(missing_ok=True)
                         continue
                 except FileNotFoundError:
                     continue  # vanished between check and open; retry immediately
@@ -1285,8 +1291,8 @@ def _acquire_port_lock():
         finally:
             # Only remove the lock we ourselves still own (content unchanged).
             try:
-                if _PORT_LOCK.read_text().startswith(str(os.getpid()) + " "):
-                    _PORT_LOCK.unlink(missing_ok=True)
+                if port_lock.read_text().startswith(str(os.getpid()) + " "):
+                    port_lock.unlink(missing_ok=True)
             except OSError:
                 pass
 

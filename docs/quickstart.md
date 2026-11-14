@@ -13,7 +13,8 @@ uv run --locked python -m pytest -q
 
 ## Run the minimal Compose smoke test
 
-Requires a reachable Docker daemon and Compose v2, an existing `main` Git ref,
+Requires a reachable Docker daemon and Compose v2, an existing `main` Git ref
+(or an explicit `--base <ref>`),
 and a committed checkout containing `examples/minimal`. The example has no Python
 source delta or dependency manifest, so those gates record inapplicability.
 It tests the runner lifecycle, not a business application.
@@ -63,13 +64,37 @@ uv run --locked factory-run \
 ```
 
 Compose paths are repo-relative by default; absolute paths are also accepted.
-The coverage base in the runner is currently `main`; the standalone coverage CLI
-accepts `--base`. A data-model gate runs when `data-model.yml` exists.
+The runner accepts `--base <ref>` (default `main`). Accepted spellings are a full
+40-hex commit ID, literal `HEAD`, an exact fully qualified `refs/...` name, or a
+simple name checked against `refs/heads/`, `refs/tags/`, and `refs/remotes/`.
+Exactly one candidate must exist; collisions are refused as `ambiguous_base`
+even when they point at the same commit. Fully qualified refs disambiguate.
+Annotated tags are peeled to commits. Abbreviated hex, revision expressions and
+reflog syntax are refused as `unsupported_base`; missing commits report
+`base_not_found`. Explicit invalid bases stop before gates, snapshots or Compose.
 
-`--env-file` currently selects the file hashed in evidence; it does **not** pass a
+Resolution happens once; coverage and evidence use the captured commit. Use that
+same full SHA with `factory-verify --base <sha>`. Omitting `--base` (API
+`base_ref=None`) retains legacy `main` behavior: a missing `main` permits the
+lifecycle and diagnostic artifacts, but unresolved evidence is rejected and can
+never certify. An ambiguous omitted `main` is refused before execution; explicit
+`--base main` with no `main` is also refused. A data-model gate runs when
+`data-model.yml` exists.
+With a subdirectory `--repo`, source cleanliness is scoped to that directory,
+while the candidate revision remains the enclosing repository's HEAD.
+
+`--env-file` selects the file hashed in evidence; it does **not** pass a
 Compose `--env-file` option. Use Compose's actual environment configuration and
 ensure the recorded file is the one used. The manifest is not a complete capture
-of inherited environment variables or image digests.
+of inherited environment variables or image digests. Absolute files outside the
+repository are accepted: evidence records only `location: external` and the
+file's SHA-256, never its path or values. Repository-local files retain their
+repo-relative path. Missing optional files have no content hash.
+
+The port allocator stores its lock under `$FACTORY_STATE_DIR/ports/.lock` when
+set, otherwise `$XDG_STATE_HOME/software-factory/ports/.lock`, otherwise
+`~/.local/state/software-factory/ports/.lock`. It creates the state directory
+with mode 0700; the installed package does not need to be writable.
 
 `--no-gates` is diagnostic only and cannot produce an acceptance pass. Service-
 dependent Python tests may fail the host coverage gate before Compose starts;

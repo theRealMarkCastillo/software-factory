@@ -175,3 +175,75 @@ def test_review_max_turns_cli_default(tmp_path):
         ["--state-dir", str(tmp_path / "state"), "run", "--assignment", "a.json"]
     )
     assert args.review_max_turns == 40
+
+
+@pytest.mark.parametrize(
+    "kind", ["outside", "parent", "symlink", "missing", "directory"]
+)
+def test_focus_refuses_invalid_spec_without_running_git(tmp_path, monkeypatch, kind):
+    from factory_orchestration import graph
+    from factory_orchestration.errors import OrchestrationError
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("# spec\n")
+    spec = outside
+    if kind == "parent":
+        spec = workspace / ".." / "outside.md"
+    elif kind == "symlink":
+        spec = workspace / "spec.md"
+        spec.symlink_to(outside)
+    elif kind == "missing":
+        spec = workspace / "missing.md"
+    elif kind == "directory":
+        spec = workspace
+
+    def unexpected_git(*args, **kwargs):
+        pytest.fail("invalid spec must be refused before computing the diff")
+
+    monkeypatch.setattr(graph.subprocess, "run", unexpected_git)
+    with pytest.raises(OrchestrationError) as exc:
+        graph._review_focus(
+            {"workspace_path": str(workspace), "spec_reference": str(spec)}
+        )
+    assert exc.value.reason == "invalid_assignment"
+
+
+def test_focus_executes_argv_only_bound_diff_in_workspace(tmp_path, monkeypatch):
+    from factory_orchestration import graph
+
+    seeded = seed(tmp_path)
+    calls = []
+    original = graph.subprocess.run
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(graph.subprocess, "run", run)
+    spec_path, changed, truncated = graph._review_focus(
+        {
+            "workspace_path": str(seeded["workspace"]),
+            "spec_reference": str(seeded["spec"]),
+            "immutable_base_sha": seeded["base"],
+            "candidate_sha": seeded["candidate"],
+        }
+    )
+    assert spec_path == "/evidence/candidate/card-spec.md"
+    assert changed == ("/evidence/candidate/app.py",)
+    assert truncated == 0
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert isinstance(argv, list)
+    assert argv[0] == "git"
+    assert argv[-5:] == [
+        "diff",
+        "--name-only",
+        "-z",
+        seeded["base"],
+        seeded["candidate"],
+    ]
+    assert kwargs["cwd"] == seeded["workspace"].resolve()
+    assert not kwargs.get("shell", False)
+    assert not kwargs.get("text", False)

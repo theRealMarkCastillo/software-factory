@@ -159,7 +159,13 @@ def test_tracked_spec_with_base_blob_digest_is_admitted(tmp_path, source):
     spec = seeded["repo" if source == "repo" else "workspace"] / "card-spec.md"
     assignment = replace(seeded["assignment"], spec_reference=str(spec))
     result = drive(seeded["deps"], assignment, seeded["attempt"])
-    assert result.status == "ready_for_authorized_completion"
+    if source == "repo":
+        # Admission accepts the base blob, but reviewer focus may not guess a
+        # workspace-relative location for a repository-only reference.
+        assert result.status == "held"
+        assert result.state["last_reason_code"] == "invalid_assignment"
+    else:
+        assert result.status == "ready_for_authorized_completion"
 
 
 @pytest.mark.parametrize(
@@ -262,6 +268,9 @@ def test_valid_review_key_reaches_the_sandbox_home_and_nowhere_else(
         candidate_sha="a" * 40,
         base_sha="b" * 40,
         spec_digest="sha256:" + "c" * 64,
+        spec_path="/evidence/candidate/spec.md",
+        changed_files=(),
+        changed_files_truncated=0,
         evidence_digest="sha256:" + "d" * 64,
         artifacts=str(evidence),
         timeout_s=60,

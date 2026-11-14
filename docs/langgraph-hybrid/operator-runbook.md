@@ -125,8 +125,23 @@ Independent review is refusal-by-default. To use the enforced R2-A reviewer,
 pass `--reviewer-sandbox` (plus `--reviewer-root`, and either
 `--review-model/--review-base-url` or a readable `--review-provider-profile`);
 otherwise the graph holds at `request_independent_review` with
-`capability_unenforced`. `scripts/live_review_fixture.py` is the reproducible
-host-side exercise of that path.
+`capability_unenforced`. The historical `scripts/live_review_fixture.py` direct
+`submit` call predates the focus fields below and needs those arguments before
+reuse; use the graph's `factory orchestrate run` path for current review requests.
+
+The independent reviewer defaults to **40 turns**. Set `--review-max-turns N`
+on `factory orchestrate run` (or `resume`) to choose an integer from **1 to 200**;
+out-of-range and non-integer values are refused before a run starts. This budget
+does not change the implementation worker's turn limit or the review timeout.
+The review request supplies the structured spec reference as a JSON container
+path under `/evidence/candidate`, not prose from the card. The reference must
+resolve inside the workspace; repository-only or escaping references hold with
+`invalid_assignment` rather than being guessed. The prompt orders the reviewer
+to read the spec first, then changed files, then `/evidence/evidence` (manifest
+and logs), then answer. Changed files come from the bound base-to-candidate Git
+diff, are JSON-encoded as container paths, and are capped at 200 with an explicit
+omitted-file count. Review receipts, digest bindings, restart adoption and the
+transcript scope audit are unchanged.
 
 ## Inspect / resume / cancel / export
 

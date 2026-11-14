@@ -418,6 +418,9 @@ def test_live_reviewer_refuses_unenforced_readonly(tmp_path):
             candidate_sha="a" * 40,
             base_sha="b" * 40,
             spec_digest="sha256:" + "c" * 64,
+            spec_path="/evidence/candidate/spec.md",
+            changed_files=(),
+            changed_files_truncated=0,
             evidence_digest="sha256:" + "d" * 64,
             artifacts=str(tmp_path),
             timeout_s=60,
@@ -454,7 +457,8 @@ class _SandboxStub:
         return None
 
 
-def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
+@pytest.mark.parametrize("max_turns", [40, 73])
+def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub, max_turns):
     """D4: no host workspace block may reach the reviewer's prompt."""
 
     workspace = tmp_path / "workspace"
@@ -464,6 +468,7 @@ def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
     reviewer = HermesReviewer(
         HermesWorker(artifact_root=tmp_path, executable=str(stub)),
         _SandboxStub(tmp_path / "attest"),
+        max_turns=max_turns,
         review_provider="custom",
         review_base_url="http://127.0.0.1:1/v1",
         review_model="stub-model",
@@ -477,6 +482,9 @@ def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
         candidate_sha="a" * 40,
         base_sha="b" * 40,
         spec_digest="sha256:" + "c" * 64,
+        spec_path="/evidence/candidate/spec.md",
+        changed_files=("/evidence/candidate/app.py",),
+        changed_files_truncated=0,
         evidence_digest="sha256:" + "d" * 64,
         artifacts=str(evidence),
         timeout_s=60,
@@ -494,6 +502,15 @@ def test_sandboxed_review_disables_host_workspace_context(tmp_path, stub):
     assert "/evidence/candidate" in prompt
     assert "Only /evidence/candidate and /evidence/evidence are readable" in prompt
     assert str(workspace) not in prompt
+    assert argv[argv.index("--max-turns") + 1] == str(max_turns)
+    focus = json.loads(
+        next(line for line in prompt.splitlines() if line.startswith('{"spec_path":'))
+    )
+    assert focus == {
+        "spec_path": "/evidence/candidate/spec.md",
+        "changed_files": ["/evidence/candidate/app.py"],
+        "changed_files_truncated": 0,
+    }
     config = (
         tmp_path
         / "attest"

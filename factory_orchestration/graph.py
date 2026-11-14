@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -168,6 +169,51 @@ def _git(repository: str, *args: str) -> str:
             f"git {' '.join(args)} failed: {result.stderr.strip()[:200]}",
         )
     return result.stdout.strip()
+
+
+def _review_focus(state: dict) -> tuple[str, tuple[str, ...], int]:
+    """Project structured assignment data into the reviewer's mounted tree."""
+
+    try:
+        workspace = Path(state["workspace_path"]).resolve(strict=True)
+        spec = Path(state["spec_reference"]).resolve(strict=True)
+        relative = spec.relative_to(workspace)
+        if not spec.is_file():
+            raise ValueError("spec is not a file")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise OrchestrationError(
+            "invalid_assignment",
+            "review spec must resolve to a file inside workspace_path",
+        ) from exc
+    # Bytes preserve newlines (including CR) and arbitrary Git filename bytes.
+    # Never split lines, strip whitespace, or interpolate filenames into prose.
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "--no-optional-locks",
+            "diff",
+            "--name-only",
+            "-z",
+            state["immutable_base_sha"],
+            state["candidate_sha"],
+        ],
+        cwd=workspace,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OrchestrationError("evidence_rejected", "review changed-file diff failed")
+    names = result.stdout.split(b"\0")[:-1]
+    changed = tuple("/evidence/candidate/" + os.fsdecode(name) for name in names[:200])
+    return (
+        "/evidence/candidate/" + relative.as_posix(),
+        changed,
+        max(0, len(names) - 200),
+    )
 
 
 def _manifest_digest(artifacts: str) -> str:
@@ -733,6 +779,7 @@ def build_graph(deps: Deps, checkpointer=None):
                     "protocol_error", "stored review key does not match the operation"
                 )
             return _apply_review(state, key, review, {"operations": operations})
+        spec_path, changed_files, truncated = _review_focus(state)
         deps.store.mark_operation(key, "submitted")
         try:
             handle, inline = deps.reviewer.submit(
@@ -743,6 +790,9 @@ def build_graph(deps: Deps, checkpointer=None):
                 candidate_sha=state["candidate_sha"],
                 base_sha=state["immutable_base_sha"],
                 spec_digest=state["spec_digest"],
+                spec_path=spec_path,
+                changed_files=changed_files,
+                changed_files_truncated=truncated,
                 evidence_digest=state["evidence_digest"],
                 artifacts=state["evidence_reference"],
                 timeout_s=deps.review_timeout_s,

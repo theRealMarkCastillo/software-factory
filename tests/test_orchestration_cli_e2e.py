@@ -157,6 +157,7 @@ def _build(tmp_path: Path) -> dict:
         capture_output=True,
     )
 
+    spec = workspace / "spec.md"
     digest = "sha256:" + __import__("hashlib").sha256(spec.read_bytes()).hexdigest()
     artifacts = tmp_path / "artifacts"
     state = tmp_path / "state"

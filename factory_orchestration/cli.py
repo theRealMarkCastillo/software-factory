@@ -34,6 +34,20 @@ from .state import Attempt, RunAssignment
 from .store import RunStore
 
 
+def _review_max_turns(value: str) -> int:
+    try:
+        turns = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "review max turns must be an integer from 1 to 200"
+        ) from exc
+    if not 1 <= turns <= 200:
+        raise argparse.ArgumentTypeError(
+            "review max turns must be an integer from 1 to 200"
+        )
+    return turns
+
+
 def _add_review_options(parser: argparse.ArgumentParser) -> None:
     """Explicit opt-in for the enforced reviewer sandbox.
 
@@ -65,6 +79,12 @@ def _add_review_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--review-base-url", default="")
     parser.add_argument("--review-model", default="")
     parser.add_argument("--review-api-mode", default="")
+    parser.add_argument(
+        "--review-max-turns",
+        type=_review_max_turns,
+        default=40,
+        help="independent reviewer turn budget, 1–200 (default: 40)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -194,7 +214,11 @@ def _reviewer(args, store: RunStore, artifacts: Path) -> HermesReviewer:
 
     worker = HermesWorker(artifact_root=artifacts)
     if not getattr(args, "reviewer_sandbox", False):
-        return HermesReviewer(worker, NoReadonlyEnforcement())
+        return HermesReviewer(
+            worker,
+            NoReadonlyEnforcement(),
+            max_turns=getattr(args, "review_max_turns", 40),
+        )
 
     from .adapters.reviewer_sandbox import SandboxedReadonlyAttestor
 
@@ -216,6 +240,7 @@ def _reviewer(args, store: RunStore, artifacts: Path) -> HermesReviewer:
     return HermesReviewer(
         worker,
         attestor,
+        max_turns=args.review_max_turns,
         review_provider=args.review_provider or mode.get("provider", ""),
         review_base_url=base_url,
         review_model=model,

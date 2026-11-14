@@ -191,6 +191,26 @@ def test_explicit_checkout_provider(monkeypatch, tmp_path):
     assert server.__module__ != "factory_orchestration.adapters.loopback_provider"
 
 
+def test_explicit_checkout_provider_can_import_checkout_packages(monkeypatch, tmp_path):
+    """A real checkout's fake imports sibling packages from the checkout root."""
+    package = tmp_path / "checkout_sibling_pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("MARK = 'from-checkout'\n")
+    fake = tmp_path / "tests" / "fakes" / "fake_llm_provider.py"
+    fake.parent.mkdir(parents=True)
+    fake.write_text(
+        "from checkout_sibling_pkg import MARK\n"
+        "class FakeLLMServer:\n    mark = MARK\n"
+        "class Text: pass\nclass ToolCall: pass\n"
+    )
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "checkout_sibling_pkg", raising=False)
+    monkeypatch.setenv("FACTORY_HERMES_REPO", str(tmp_path))
+    server, _text, _tool = reviewer_sandbox._load_fake_provider()
+    assert server.mark == "from-checkout"
+    sys.modules.pop("checkout_sibling_pkg", None)
+
+
 def _post(server, body, path="/chat/completions"):
     request = Request(
         server.base_url + path,

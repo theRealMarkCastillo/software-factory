@@ -300,20 +300,12 @@ def test_verify_and_promote_reject_a_replay_report(work_base, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_ci_checkout_fetches_the_history_the_historical_replay_needs():
-    """A shallow checkout lacks ``54d347e``; CI must provision full history."""
-    workflow = (REPO / ".github" / "workflows" / "tests.yml").read_text()
-    lines = workflow.splitlines()
-    start = next(i for i, line in enumerate(lines) if "actions/checkout@" in line)
-    step = []
-    for line in lines[start + 1 :]:
-        stripped = line.strip()
-        if stripped.startswith("- "):
-            break
-        if stripped.startswith("with:"):
-            continue
-        step.append(stripped)
-    assert "fetch-depth: 0" in step, step
+def test_local_checkout_has_the_history_the_historical_replay_needs():
+    """The local gate needs historical objects, not a hosted checkout step."""
+    contributing = (REPO / "CONTRIBUTING.md").read_text()
+    assert "full Git history" in contributing
+    for revision in (HISTORICAL_BASELINE, HISTORICAL_CANDIDATE):
+        assert git(REPO, "cat-file", "-t", revision) == "commit"
 
 
 def test_real_historical_training_replay(work_base):

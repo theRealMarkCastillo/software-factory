@@ -1,7 +1,9 @@
 # Contributing
 
 Use uv with the committed lockfile. Python 3.12 is the local default.
-The local test suite and Ruff checks are the contributor gate:
+The local test suite and Ruff checks are the contributor gate. Use a checkout
+with full Git history (the default clone, not `--depth`): the historical training
+replay checks out its baseline and candidate commits from local objects.
 
 ```sh
 uv sync --locked

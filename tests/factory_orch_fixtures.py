@@ -58,6 +58,7 @@ def build_repo(root: Path) -> tuple[Path, str, str]:
     (repo / ".env.example").write_text("A=1\n")
     (repo / "tests" / "fixtures").mkdir(parents=True)
     (repo / "tests" / "fixtures" / "case.json").write_text('{"case":1}\n')
+    make_spec(repo)
     base = commit(repo, "base")
     (repo / "app.py").write_text("x = 2\ny = 3\n")
     candidate = commit(repo, "candidate")
@@ -206,7 +207,8 @@ def seed(root: Path) -> dict:
     repo, base, candidate = build_repo(root)
     workspace = add_worktree(repo, candidate, root / "workspace")
     artifacts = make_evidence(root / "artifacts", repo, base, candidate)
-    spec, digest = make_spec(root)
+    spec = repo / "card-spec.md"
+    digest = "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest()
     state_dir = root / "state"
     enable_admission(state_dir)
     attempt = Attempt(task_id=CARD, run_id=7, profile="factory-runner")

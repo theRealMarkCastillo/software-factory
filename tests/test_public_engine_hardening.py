@@ -16,27 +16,63 @@ from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.runner import drive
 
 
-def test_public_tracked_sources_have_no_personal_paths():
+def _public_source_leaks(root):
     result = subprocess.run(
         [
             "git",
             "grep",
             "-n",
-            "/" + "Users/",
+            "/Users/",
             "--",
             "factory",
             "factory_orchestration",
             "scripts",
             "tests",
+            "README.md",
+            "docs/architecture.md",
             "docs/langgraph-hybrid/operator-runbook.md",
             "docs/langgraph-hybrid/reviewer-sandbox.md",
             ":(exclude)tests/fixtures/kanban-show.json",
         ],
+        cwd=root,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 1, result.stdout
+    assert result.returncode in (0, 1), result.stderr
+    return result.stdout.splitlines()
+
+
+def test_public_tracked_sources_have_no_personal_paths():
+    assert not _public_source_leaks(Path(__file__).resolve().parents[1])
+
+
+@pytest.mark.parametrize(
+    "text,leaks",
+    [
+        ("/Users/<user>/repo and /home/<user>/repo", False),
+        ("real-home", True),
+        ("deny-listed", True),
+        ("-----BEGIN " + "PRIVATE KEY-----", True),
+    ],
+)
+def test_public_leak_scan_is_personal_not_platform_wide(
+    tmp_path, monkeypatch, text, leaks
+):
+    monkeypatch.setenv(
+        "FACTORY_PUBLIC_DENY_NAMES", "synthetic-private-host,synthetic-private-user"
+    )
+    if text == "real-home":
+        text = str(Path.home() / "repo")
+    elif text == "deny-listed":
+        text = "host: synthetic-private-host"
+    (tmp_path / "factory").mkdir()
+    (tmp_path / "factory" / "example.txt").write_text(text)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "factory/example.txt"], check=True
+    )
+    assert bool(_public_source_leaks(tmp_path)) is leaks
 
 
 @pytest.mark.parametrize("use_env", [True, False])

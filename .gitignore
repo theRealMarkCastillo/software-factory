@@ -21,3 +21,7 @@ artifacts/
 .opencode/
 .agents/
 .claude/
+
+# Raw run records (transcripts, request/receipt JSON, shell snapshots) carry
+# host-specific paths. The acceptance scripts write them here; keep them local.
+docs/langgraph-hybrid/evidence/

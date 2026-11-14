@@ -1,5 +1,6 @@
 """Public defaults and fail-closed orchestration admission regressions."""
 
+import getpass
 import json
 import os
 import re
@@ -19,18 +20,27 @@ from factory_orchestration.runner import drive
 
 
 def _public_source_leaks(root):
-    """Scan current tracked sources, not archived evidence or local files.
+    """Scan every tracked UTF-8 text file, never untracked local files.
 
-    FACTORY_PUBLIC_DENY_NAMES is an optional comma-separated list of private
-    host/user names. Resolve the real home at runtime; never persist it here.
+    FACTORY_LEAK_DENYLIST optionally names a local UTF-8 file with one literal
+    private identifier per line (blank lines and # comments are ignored).
+    Missing configuration skips only that additional list, not the base scan.
     """
-    names = [
-        name.strip()
-        for name in os.environ.get("FACTORY_PUBLIC_DENY_NAMES", "").split(",")
-    ]
-    private = [str(Path.home()), *(name for name in names if name)]
+    names = os.environ.get("FACTORY_PUBLIC_DENY_NAMES", "").split(",")
+    denylist = os.environ.get("FACTORY_LEAK_DENYLIST")
+    if denylist:
+        names.extend(
+            line.strip()
+            for line in Path(denylist).read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+    private = [str(Path.home()), *(name.strip() for name in names if name.strip())]
     personal = re.compile(
-        "|".join(re.escape(value) for value in private), re.IGNORECASE
+        "|".join(re.escape(value) for value in private)
+        + r"|(?<![\w])"
+        + re.escape(getpass.getuser())
+        + r"(?![\w])",
+        re.IGNORECASE,
     )
     secrets = re.compile(
         r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"
@@ -38,21 +48,7 @@ def _public_source_leaks(root):
         r"|AKIA[A-Z0-9]{16}"
     )
     result = subprocess.run(
-        [
-            "git",
-            "ls-files",
-            "-z",
-            "--",
-            "factory",
-            "factory_orchestration",
-            "scripts",
-            "tests",
-            "README.md",
-            "docs/architecture.md",
-            "docs/langgraph-hybrid/operator-runbook.md",
-            "docs/langgraph-hybrid/reviewer-sandbox.md",
-            ":(exclude)tests/fixtures/kanban-show.json",
-        ],
+        ["git", "ls-files", "-z"],
         cwd=root,
         capture_output=True,
         text=True,
@@ -63,9 +59,14 @@ def _public_source_leaks(root):
         path = root / name
         if not path.is_file():
             continue
-        for line_number, line in enumerate(
-            path.read_text(errors="replace").splitlines(), 1
-        ):
+        data = path.read_bytes()
+        if b"\0" in data:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), 1):
             if personal.search(line) or secrets.search(line):
                 # Report locations only: do not echo leaked credentials into logs.
                 leaks.append(f"{name}:{line_number}")
@@ -102,6 +103,45 @@ def test_public_leak_scan_is_personal_not_platform_wide(
         ["git", "-C", str(tmp_path), "add", "factory/example.txt"], check=True
     )
     assert bool(_public_source_leaks(tmp_path)) is leaks
+
+
+@pytest.mark.parametrize(
+    "name", ["docs/deep/note.md", "tests/fixtures/sample.json", "other.txt"]
+)
+@pytest.mark.parametrize(
+    "kind", ["home", "username", "denylist", "token", "placeholder"]
+)
+def test_leak_scan_covers_all_tracked_text(tmp_path, monkeypatch, name, kind):
+    monkeypatch.delenv("FACTORY_PUBLIC_DENY_NAMES", raising=False)
+    monkeypatch.delenv("FACTORY_LEAK_DENYLIST", raising=False)
+    text = {
+        "home": str(Path.home() / "private"),
+        "username": "owner: " + getpass.getuser(),
+        "denylist": "synthetic-sensitive-card",
+        "token": "gh" + "p_" + "x" * 30,
+        "placeholder": "/Users/<user> and /home/runner",
+    }[kind]
+    if kind == "denylist":
+        denylist = tmp_path / "local-denylist"
+        denylist.write_text("# local only\n\nsynthetic-sensitive-card\n")
+        monkeypatch.setenv("FACTORY_LEAK_DENYLIST", str(denylist))
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    (tmp_path / "untracked.txt").write_text(str(Path.home()))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", name], check=True)
+    assert _public_source_leaks(tmp_path) == (
+        [] if kind == "placeholder" else [f"{name}:1"]
+    )
+
+
+def test_leak_scan_ignores_binary_files(tmp_path, monkeypatch):
+    monkeypatch.delenv("FACTORY_LEAK_DENYLIST", raising=False)
+    (tmp_path / "image.bin").write_bytes(b"\0" + str(Path.home()).encode())
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "image.bin"], check=True)
+    assert _public_source_leaks(tmp_path) == []
 
 
 @pytest.mark.parametrize("use_env", [True, False])

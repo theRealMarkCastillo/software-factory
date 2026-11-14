@@ -206,13 +206,25 @@ def test_review_credentials_refuse_before_sandbox(tmp_path, monkeypatch, provide
     assert "outcome" not in receipt
 
 
-def test_valid_review_key_launches_without_persisting_the_key(tmp_path, monkeypatch):
+def test_valid_review_key_reaches_the_sandbox_home_and_nowhere_else(
+    tmp_path, monkeypatch
+):
+    """Hermes resolves provider credentials from the profile home's ``.env``
+    (the host gateway multiplexes profiles and never unions process env), so
+    the selected review key must be in the disposable sandbox home's ``.env``
+    (0600) -- that file only, holding only that key."""
     from factory_orchestration.adapters.base import AttestationReceipt
     from factory_orchestration.adapters.reviewer_sandbox import SandboxSpec
 
     canary = "test-only-review-key-7e837194f5d249fe"
+    other = "test-only-unselected-key-1b9c2f0e44a7"
     monkeypatch.setattr(
-        hermes, "read_profile_provider_env", lambda profile: {"OPENAI_API_KEY": canary}
+        hermes,
+        "read_profile_provider_env",
+        lambda profile: {
+            "OPENAI_API_KEY": canary,
+            "ANTHROPIC_API_KEY": other,
+        },
     )
     candidate = tmp_path / "candidate"
     evidence = tmp_path / "evidence"
@@ -258,6 +270,15 @@ def test_valid_review_key_launches_without_persisting_the_key(tmp_path, monkeypa
     launch.assert_called_once()
     assert launch.call_args.kwargs["env"]["OPENAI_API_KEY"] == canary
     attestor.verify_terminal.assert_called_once_with(spec)
+    env_file = spec.home / ".env"
+    assert env_file.read_text().splitlines() == [f"OPENAI_API_KEY={canary}"]
+    assert env_file.stat().st_mode & 0o777 == 0o600
+    holders = [
+        path
+        for path in tmp_path.rglob("*")
+        if path.is_file() and canary.encode() in path.read_bytes()
+    ]
+    assert holders == [env_file]
     for path in tmp_path.rglob("*"):
         if path.is_file():
-            assert canary.encode() not in path.read_bytes(), str(path)
+            assert other.encode() not in path.read_bytes(), str(path)

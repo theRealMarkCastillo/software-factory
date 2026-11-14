@@ -28,15 +28,15 @@ _SHAPES = (
 )
 
 
-def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
-    """Redact exact env values and the fixed token shapes in one pass.
+def _redaction_spans(text: str, *, cut_window: bool = False) -> list[tuple]:
+    """Disjoint, sorted ``(start, end, label)`` spans to replace in ``text``.
 
-    Every rule is matched against the ORIGINAL text; the matched spans are then
-    merged and replaced together. No rule ever sees another rule's output, so a
-    replacement cannot hide a shape (for example an environment value that
-    occurs inside a PEM delimiter) or leave a fragment of an overlapping match.
-    The live process environment is read on each call and never logged.
-    Provider name sets are imported lazily to avoid a dependency cycle.
+    Every rule is matched against the ORIGINAL text and the matches are merged
+    into a span union. No rule ever sees another rule's output, so a
+    replacement cannot hide a shape (an environment value inside a PEM
+    delimiter) and overlapping matches cannot leave a fragment. Environment
+    values are located one value at a time, including overlapping occurrences
+    of the same or of different values.
     """
     from .adapters.hermes import PROVIDER_ENV, REVIEW_PROVIDER_KEYS
 
@@ -48,13 +48,13 @@ def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
         if len(value) >= 8 and (_ENV_NAME.search(name) or name in provider_names):
             values.setdefault(value, name)
 
-    # (start, end, label); earlier entries win the label of a merged span.
-    spans: list[tuple[int, int, str]] = []
+    # Earlier entries win the label of a merged span.
+    found: list[tuple[int, int, str]] = []
     pem_spans = []
     for label, pattern in _SHAPES:
         for match in pattern.finditer(text):
             begin = match.end(1) if label == "bearer" else match.start()
-            spans.append((begin, match.end(), label))
+            found.append((begin, match.end(), label))
             if label == "pem":
                 pem_spans.append((begin, match.end()))
     if cut_window:
@@ -68,30 +68,33 @@ def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
             if not any(a <= match.start() < b for a, b in pem_spans)
         ]
         if orphan_ends:
-            spans.insert(0, (0, max(orphan_ends), "pem"))
-    if values:
-        pattern = re.compile(
-            "|".join(
-                re.escape(value) for value in sorted(values, key=len, reverse=True)
-            )
-        )
-        for match in pattern.finditer(text):
-            spans.append((match.start(), match.end(), values[match.group()]))
-    if not spans:
-        return text
+            found.insert(0, (0, max(orphan_ends), "pem"))
+    for value in sorted(values, key=len, reverse=True):
+        begin = text.find(value)
+        while begin != -1:
+            found.append((begin, begin + len(value), values[value]))
+            begin = text.find(value, begin + 1)
 
-    order = {id(span): index for index, span in enumerate(spans)}
     merged: list[list] = []
-    for span in sorted(spans, key=lambda item: (item[0], -item[1])):
-        if merged and span[0] < merged[-1][1]:
+    ranked = sorted(enumerate(found), key=lambda item: (item[1][0], -item[1][1]))
+    for rank, (begin, end, label) in ranked:
+        if merged and begin < merged[-1][1]:
             last = merged[-1]
-            last[1] = max(last[1], span[1])
-            if order[id(span)] < last[3]:
-                last[2], last[3] = span[2], order[id(span)]
+            last[1] = max(last[1], end)
+            if rank < last[3]:
+                last[2], last[3] = label, rank
         else:
-            merged.append([span[0], span[1], span[2], order[id(span)]])
+            merged.append([begin, end, label, rank])
+    return [(begin, end, label) for begin, end, label, _ in merged]
+
+
+def redact_diagnostic(text: str, *, cut_window: bool = False) -> str:
+    """Replace exact env values and the fixed token shapes in one pass.
+
+    The live process environment is read on each call and never logged.
+    """
     parts, cursor = [], 0
-    for begin, end, label, _ in merged:
+    for begin, end, label in _redaction_spans(text, cut_window=cut_window):
         parts.append(text[cursor:begin])
         parts.append(f"[REDACTED:{label}]")
         cursor = end

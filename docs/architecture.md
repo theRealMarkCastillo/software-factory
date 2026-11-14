@@ -32,7 +32,7 @@ Docker socket, and system paths.
 
 Relative sources are resolved against the subject repository. The exception is
 narrow: the checkout must be nested below a user home directory
-(a platform user-home path), so a normal repository-local data
+(`/Users/<user>/...` or `/home/<user>/...`), so a normal repository-local data
 or fixture mount keeps working there. Every other location -- the host root,
 sensitive host roots, user and immediate home directories, and checkouts under
 system roots such as `/etc` or `/var` -- gets no relative-mount exception. The

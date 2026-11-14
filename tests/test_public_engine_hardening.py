@@ -1,6 +1,8 @@
 """Public defaults and fail-closed orchestration admission regressions."""
 
 import json
+import os
+import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -17,12 +19,29 @@ from factory_orchestration.runner import drive
 
 
 def _public_source_leaks(root):
+    """Scan current tracked sources, not archived evidence or local files.
+
+    FACTORY_PUBLIC_DENY_NAMES is an optional comma-separated list of private
+    host/user names. Resolve the real home at runtime; never persist it here.
+    """
+    names = [
+        name.strip()
+        for name in os.environ.get("FACTORY_PUBLIC_DENY_NAMES", "").split(",")
+    ]
+    private = [str(Path.home()), *(name for name in names if name)]
+    personal = re.compile(
+        "|".join(re.escape(value) for value in private), re.IGNORECASE
+    )
+    secrets = re.compile(
+        r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----"
+        r"|(?:gh[pousr]_|github_pat_|sk-)[A-Za-z0-9_-]{20,}"
+        r"|AKIA[A-Z0-9]{16}"
+    )
     result = subprocess.run(
         [
             "git",
-            "grep",
-            "-n",
-            "/Users/",
+            "ls-files",
+            "-z",
             "--",
             "factory",
             "factory_orchestration",
@@ -37,10 +56,20 @@ def _public_source_leaks(root):
         cwd=root,
         capture_output=True,
         text=True,
-        check=False,
+        check=True,
     )
-    assert result.returncode in (0, 1), result.stderr
-    return result.stdout.splitlines()
+    leaks = []
+    for name in filter(None, result.stdout.split("\0")):
+        path = root / name
+        if not path.is_file():
+            continue
+        for line_number, line in enumerate(
+            path.read_text(errors="replace").splitlines(), 1
+        ):
+            if personal.search(line) or secrets.search(line):
+                # Report locations only: do not echo leaked credentials into logs.
+                leaks.append(f"{name}:{line_number}")
+    return leaks
 
 
 def test_public_tracked_sources_have_no_personal_paths():

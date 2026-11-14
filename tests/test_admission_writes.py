@@ -191,3 +191,54 @@ def test_missing_policy_defaults_to_disabled(tmp_path, capsys):
         "enabled": False,
         "enrolled_cards": ["new"],
     }
+
+
+def test_atomic_replace_fsync_order_and_lock_lifetime(tmp_path, monkeypatch):
+    import stat
+
+    path = tmp_path / "admission.json"
+    before = '{"enabled": false, "enrolled_cards": []}'
+    path.write_text(before)
+    events = []
+    original_fsync, original_replace = os.fsync, os.replace
+
+    def assert_locked():
+        with (tmp_path / "admission.lock").open("a+") as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def fsync(fd):
+        assert_locked()
+        events.append("directory" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+        original_fsync(fd)
+
+    def replace(source, destination):
+        assert_locked()
+        assert source.parent == path.parent
+        assert destination == path
+        assert path.read_text() == before
+        assert json.loads(source.read_text())["enabled"] is True
+        events.append("replace")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    assert _call(tmp_path, "--enable") == 0
+    assert events == ["file", "replace", "directory"]
+    assert not list(tmp_path.glob(".admission-*.tmp"))
+    with (tmp_path / "admission.lock").open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_failed_replace_keeps_old_file_and_cleans_temp(tmp_path, monkeypatch):
+    path = tmp_path / "admission.json"
+    before = '{"enabled": false, "enrolled_cards": []}'
+    path.write_text(before)
+
+    def refuse_replace(*args):
+        raise OSError("injected replacement failure")
+
+    monkeypatch.setattr(os, "replace", refuse_replace)
+    assert _call(tmp_path, "--enable") != 0
+    assert path.read_text() == before
+    assert not list(tmp_path.glob(".admission-*.tmp"))

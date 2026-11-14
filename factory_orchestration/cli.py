@@ -8,8 +8,13 @@ and the caller is the current Hermes attempt.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
+import math
+import os
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from .adapters.gates import InstalledLauncherGate
@@ -26,7 +31,7 @@ from .errors import OrchestrationError
 from .graph import Deps
 from .runner import cancel, drive, export_run, inspect_run, resume, write_export
 from .state import Attempt, RunAssignment
-from .store import AdmissionPolicy, RunStore
+from .store import RunStore
 
 
 def _add_review_options(parser: argparse.ArgumentParser) -> None:
@@ -126,6 +131,13 @@ def build_parser() -> argparse.ArgumentParser:
     admission.add_argument("--enable", action="store_true")
     admission.add_argument("--disable", action="store_true")
     admission.add_argument("--enroll", action="append", default=[])
+    admission.add_argument("--unenroll", action="append", default=[])
+    admission.add_argument(
+        "--lock-timeout",
+        type=float,
+        default=5.0,
+        help="maximum seconds to wait for admission.lock (default: 5)",
+    )
     return parser
 
 
@@ -283,20 +295,94 @@ def _dispatch(args, store: RunStore, state_dir: Path) -> int:
 
 
 def _admission(args, state_dir: Path) -> int:
+    """Cooperate with other admission writers using the stable sidecar lock."""
+    if set(args.enroll) & set(args.unenroll):
+        raise OrchestrationError(
+            "invalid_assignment", "cannot enroll and unenroll the same card"
+        )
+    if not math.isfinite(args.lock_timeout) or args.lock_timeout < 0:
+        raise OrchestrationError(
+            "invalid_assignment", "lock timeout must be finite and non-negative"
+        )
     path = state_dir / "admission.json"
-    policy = AdmissionPolicy.load(state_dir)
-    enabled = policy.enabled
-    cards = set(policy.enrolled_cards)
-    if args.enable:
-        enabled = True
-    if args.disable:
-        enabled = False
-    for card in args.enroll:
-        cards.add(card)
-    payload = {"enabled": enabled, "enrolled_cards": sorted(cards)}
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    print(json.dumps(payload, indent=2, sort_keys=True))
+    try:
+        with (state_dir / "admission.lock").open("a+") as lock:
+            deadline = time.monotonic() + args.lock_timeout
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise OrchestrationError(
+                            "workspace_conflict", "timed out waiting for admission.lock"
+                        ) from None
+                    time.sleep(min(0.05, remaining))
+            try:
+                payload = _read_admission_payload(path)
+                updated = dict(payload)
+                if args.enable:
+                    updated["enabled"] = True
+                if args.disable:
+                    updated["enabled"] = False
+                cards = set(payload.get("enrolled_cards", []))
+                changed_cards = (cards | set(args.enroll)) - set(args.unenroll)
+                if changed_cards != cards:
+                    updated["enrolled_cards"] = sorted(changed_cards)
+                if updated != payload:
+                    _replace_admission(path, updated)
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+    except (OSError, ValueError) as exc:
+        raise OrchestrationError(
+            "invalid_assignment", f"cannot update admission policy: {exc}"
+        ) from exc
+    print(json.dumps(updated, indent=2, sort_keys=True))
     return 0
+
+
+def _read_admission_payload(path: Path) -> dict:
+    """Read fresh under the writer lock, retaining fields unknown to this CLI."""
+    try:
+        payload = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {"enabled": False, "enrolled_cards": []}
+    if not isinstance(payload, dict):
+        raise ValueError("admission policy must be a JSON object")
+    cards = payload.get("enrolled_cards", [])
+    if not isinstance(cards, list) or not all(isinstance(card, str) for card in cards):
+        raise ValueError("enrolled_cards must be a list of card ids")
+    if "enabled" in payload and not isinstance(payload["enabled"], bool):
+        raise ValueError("enabled must be a boolean")
+    return payload
+
+
+def _replace_admission(path: Path, payload: dict) -> None:
+    """Publish a complete policy atomically and durably before unlocking."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=".admission-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _attempt(args, assignment: RunAssignment, store: RunStore) -> Attempt:

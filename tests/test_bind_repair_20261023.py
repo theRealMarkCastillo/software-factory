@@ -6,7 +6,7 @@ check, so repo-root mounts, arbitrary home roots, system-root relative mounts,
 and ``.env.*`` credential files were all authorized.
 
 The allowed case is deliberately narrow: a checkout nested below a user home
-directory (platform user-home paths) may mount an existing
+directory (``/Users/<user>/...`` or ``/home/<user>/...``) may mount an existing
 ordinary subdirectory whose tree contains no credential/VCS path and no symlink
 leaving the repository. Everything else fails closed.
 """
@@ -43,7 +43,7 @@ class TestRepoRootMountsRejected:
             )
 
     def test_root_mount_rejected_for_synthetic_home_checkout(self):
-        repo = policy.Path("/" + "Users/worker/subject-repo")
+        repo = policy.Path("/Users/worker/subject-repo")
         with pytest.raises(PolicyViolation, match="repository root"):
             policy.check_bind_source(".", repo_root=repo)
 
@@ -169,7 +169,7 @@ class TestPreservedDenials:
             ".ssh/id_rsa",
             "secrets/token",
             "/etc/passwd",
-            "/" + "Users/example/private",
+            "/Users/example/private",
             "/home/example/.ssh/id_rsa",
         ],
     )

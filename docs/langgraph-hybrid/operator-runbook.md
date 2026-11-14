@@ -39,7 +39,15 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration admission \
 
 `admission.json` holds `{"enabled": bool, "enrolled_cards": [...]}`. Missing file
 means disabled. `--disable` stops new admissions; runs already paused can still
-be inspected, drained or cancelled.
+be inspected, drained or cancelled. Repeat `--unenroll CARD` to remove only those
+cards; removing an absent card does not rewrite the policy. Enrolling and
+unenrolling the same card in one invocation is refused.
+
+Writers cooperate through `<state-dir>/admission.lock`, re-read the policy under
+an exclusive lock, preserve unknown fields, and publish by fsynced atomic
+replacement. `admission --lock-timeout SECONDS` bounds the wait (default: 5);
+a timeout or malformed policy is refused without changing `admission.json`.
+Do not delete the lock file while writers may be active. Readers need no lock.
 
 ## Run one card (inside the sanctioned owner process)
 

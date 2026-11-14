@@ -362,7 +362,9 @@ def run_factory_card(
     # touching Docker. This closes the repo_root=/etc reachability path.
     assert_safe_repo_root(repo)
 
-    result = RunResult(card_id=card_id, project_name="", mode=resolved_mode)
+    result = RunResult(
+        card_id=card_id, project_name="", mode=resolved_mode, gates_run=run_gates
+    )
     start = time.time()
 
     # 1. Static validation before anything touches Docker.
@@ -386,6 +388,11 @@ def run_factory_card(
     #     afterwards could not bind what was actually measured.
     source_start = capture_source(repo)
     base_info = resolve_base_info(repo, base_ref)
+    if base_info["kind"] != "commit":
+        result.stage = "base_resolution"
+        result.error = f"cannot resolve diff base to a commit: {base_ref}"
+        result.duration_s = time.time() - start
+        return result
 
     # Pre-Docker gates: fail closed BEFORE anything is built or run.
     result.gates_run = run_gates
@@ -721,6 +728,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--card", required=True)
     parser.add_argument("--repo", required=True)
     parser.add_argument(
+        "--base", default="main", help="Diff base ref (resolved once before gates)."
+    )
+    parser.add_argument(
         "--compose",
         action="append",
         required=True,
@@ -735,7 +745,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--env-file",
         default=".env",
-        help="Env file path (repo-relative by default; absolute/cwd-relative accepted).",
+        help="File hashed for evidence only, not injected into Compose "
+        "(repo-relative by default; absolute/cwd-relative accepted).",
     )
     parser.add_argument(
         "--env-example",
@@ -792,6 +803,7 @@ def main(argv: list[str] | None = None) -> int:
         run_gates=not args.no_gates,
         mode=args.mode,
         artifacts_root=args.artifacts_root,
+        base_ref=args.base,
     )
     print(json.dumps(result.to_dict(), indent=2))
 

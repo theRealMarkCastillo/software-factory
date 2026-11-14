@@ -255,7 +255,7 @@ def capture_source(repo_path: str | Path) -> dict:
     repo = Path(repo_path).expanduser().resolve()
     try:
         sha = _run_git(repo, ["rev-parse", "HEAD"])
-        status = _run_git(repo, ["status", "--short"])
+        status = _run_git(repo, ["status", "--short", "--", "."])
     except EvidenceError:
         return {"sha": "", "status_porcelain": ""}
     return {"sha": sha, "status_porcelain": status}
@@ -334,17 +334,18 @@ def _environment_snapshot(repo: Path, env_file: str) -> dict:
 
     The reviewer sees this manifest under ``/evidence/candidate``; a host
     absolute path here would name a path the reviewer is forbidden (and unable)
-    to use. Keep the record repo-relative and state its origin; the manifest
-    digest bound in the run receipt still proves which host file was hashed.
+    to use. Keep repository records relative, and external records path-free;
+    hashes bind the file contents without exposing host paths or values.
     """
 
     path = (repo / env_file).resolve()
     try:
         relative = path.relative_to(repo.resolve()).as_posix()
-    except ValueError as exc:
-        raise EvidenceError(
-            f"environment file escapes the repository root: {env_file}"
-        ) from exc
+    except ValueError:
+        record = {"location": "external"}
+        if path.is_file():
+            record["sha256"] = _sha256(path)
+        return record
     record = {
         "path": relative,
         "path_rel": relative,

@@ -118,6 +118,16 @@ def _snapshots(monkeypatch, before, after):
 
 def _wire_successful_run(monkeypatch, tmp_path):
     calls = []
+    real_resolve_base = runner.resolve_base_info
+
+    def resolve_base(repo, ref):
+        # State-machine fixtures mock Git as well as Docker. Recording tests
+        # use real repositories and must retain real immutable resolution.
+        if not (Path(repo) / ".git").exists():
+            return {"ref": ref, "kind": "commit", "sha": BASE_SHA}
+        return real_resolve_base(repo, ref)
+
+    monkeypatch.setattr(runner, "resolve_base_info", resolve_base)
     monkeypatch.setattr(
         runner, "new_factory_project", lambda _card: "factory-card-abc123"
     )
@@ -475,11 +485,10 @@ def test_coverage_gate_skipped_when_no_added_python(tmp_path, monkeypatch):
     coverage = result.gates["coverage"]
     assert coverage["status"] == "skipped"
     assert coverage["reason"] == "no_added_python"
-    # This fixture is not a git repo, so the base cannot resolve -- but the
-    # outcome is recorded rather than silently dropped (the resolved-SHA case
-    # is asserted in test_acceptance_run_records_source_base_runtime_and_artifacts).
-    assert coverage["base_kind"] == "unresolved"
-    assert coverage["base_sha"] == ""
+    # Lifecycle fixtures supply a resolved base: unresolved bases now stop
+    # before gates (covered by the real-Git CLI regressions).
+    assert coverage["base_kind"] == "commit"
+    assert coverage["base_sha"] == BASE_SHA
     assert any("coverage gate skipped" in line for line in result.log)
 
 

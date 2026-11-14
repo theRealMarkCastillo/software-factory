@@ -27,7 +27,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
-LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
+from factory_orchestration.adapters.installed import default_launcher
+
 CARD = "t_1a2b3c4d"
 BASE_CARD = "t_lgaccept"
 
@@ -42,6 +43,9 @@ def build_repo(repo: Path) -> tuple[str, str]:
     repo.mkdir(parents=True)
     git(repo, "init", "-q", "-b", "main")
     (repo / ".env.example").write_text("ACCEPTANCE_MARKER=1\n")
+    (repo / "spec.md").write_text(
+        "# Pilot card\n\nRun installed acceptance on a disposable repo.\n"
+    )
     (repo / "README.md").write_text("Disposable installed-acceptance fixture.\n")
     (repo / "compose.yml").write_text(
         "services:\n"
@@ -80,7 +84,7 @@ def build_repo(repo: Path) -> tuple[str, str]:
 def verify(artifacts: Path, repo: Path, base: str, candidate: str) -> dict:
     completed = subprocess.run(
         [
-            str(LAUNCHER),
+            str(default_launcher()),
             "verify",
             "--artifacts-dir",
             str(artifacts),
@@ -109,7 +113,7 @@ def installed_acceptance(scratch: Path, repo: Path, artifacts: Path) -> dict:
     base, candidate = build_repo(repo)
     run = subprocess.run(
         [
-            str(LAUNCHER),
+            str(default_launcher()),
             "run",
             "--card",
             BASE_CARD,
@@ -154,8 +158,7 @@ def graph_pilot(scratch: Path, repo: Path, base: str, candidate: str) -> dict:
         check=True,
         capture_output=True,
     )
-    spec = pilot / "spec.md"
-    spec.write_text("# Pilot card\n\nRun installed acceptance on a disposable repo.\n")
+    spec = repo / "spec.md"
     digest = "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest()
     artifacts = pilot / "artifacts"
     state = pilot / "state"
@@ -170,7 +173,7 @@ def graph_pilot(scratch: Path, repo: Path, base: str, candidate: str) -> dict:
         store=RunStore(state),
         board=board,
         worker=FakeWorker(root=pilot / "effects", candidate_sha=candidate),
-        gate=InstalledLauncherGate(LAUNCHER, pilot / "gate-receipts"),
+        gate=InstalledLauncherGate(default_launcher(), pilot / "gate-receipts"),
         reviewer=FakeReviewer(root=pilot / "effects", outcome="approve"),
         state_dir=state,
         artifact_dir=artifacts,
@@ -188,7 +191,7 @@ def graph_pilot(scratch: Path, repo: Path, base: str, candidate: str) -> dict:
         worker_profile="factory-runner",
         reviewer_profile="factory-qa",
         acceptance_argv=(
-            str(LAUNCHER),
+            str(default_launcher()),
             "run",
             "--card",
             CARD,
@@ -202,7 +205,7 @@ def graph_pilot(scratch: Path, repo: Path, base: str, candidate: str) -> dict:
             str(artifacts),
         ),
         acceptance_artifacts=str(artifacts),
-        engine_release_reference="installed:" + str(LAUNCHER),
+        engine_release_reference="installed:" + str(default_launcher()),
         engine_fingerprint="sha256:" + "a" * 64,
         host_policy_digest="sha256:" + "b" * 64,
     )
@@ -229,15 +232,14 @@ def main() -> int:
     parser.add_argument("--run", action="store_true", help="actually execute")
     parser.add_argument(
         "--scratch",
-        default="~/.hermes/profiles/factory-runner/cache/scratch/"
-        "lg-installed-acceptance",
+        default=str(Path.home() / ".cache" / "factory" / "lg-installed-acceptance"),
         help="disposable scratch directory",
     )
     args = parser.parse_args()
     scratch = Path(args.scratch).expanduser().resolve()
     if not args.run:
         print(
-            f"would build a disposable repo and run {LAUNCHER} run/verify in {scratch}"
+            f"would build a disposable repo and run {default_launcher()} run/verify in {scratch}"
         )
         return 0
     if scratch.exists():

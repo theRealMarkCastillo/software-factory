@@ -21,14 +21,12 @@ from .adapters.hermes import (
     read_profile_model_config,
     read_profile_provider_env,
 )
-from .adapters.installed import discover
+from .adapters.installed import default_launcher, discover
 from .errors import OrchestrationError
 from .graph import Deps
 from .runner import cancel, drive, export_run, inspect_run, resume, write_export
 from .state import Attempt, RunAssignment
 from .store import AdmissionPolicy, RunStore
-
-DEFAULT_LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
 
 
 def _add_review_options(parser: argparse.ArgumentParser) -> None:
@@ -73,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--state-dir", required=True, help="durable state directory")
-    parser.add_argument("--launcher", default=str(DEFAULT_LAUNCHER))
+    parser.add_argument("--launcher", default=str(default_launcher()))
     sub = parser.add_subparsers(dest="command", required=True)
 
     run = sub.add_parser("run", help="admit and drive one enrolled card")

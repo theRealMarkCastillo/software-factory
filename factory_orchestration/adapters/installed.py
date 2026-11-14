@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import tomllib
 from dataclasses import asdict, dataclass
@@ -75,10 +76,27 @@ class InstalledRelease:
         return completed.returncode == 0 and "usage" in completed.stdout.lower()
 
 
-def discover(
-    ops_root: str | Path = "~/git/software-factory-ops",
-) -> InstalledRelease:
-    root = Path(ops_root).expanduser().resolve()
+def default_ops_root() -> Path:
+    """Resolve host installation configuration at use time, never on import."""
+
+    configured = os.environ.get("FACTORY_OPS_ROOT")
+    return (
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / "git" / "software-factory-ops"
+    )
+
+
+def default_launcher() -> Path:
+    return default_ops_root() / "bin" / "factory"
+
+
+def discover(ops_root: str | Path | None = None) -> InstalledRelease:
+    root = (
+        (Path(ops_root) if ops_root is not None else default_ops_root())
+        .expanduser()
+        .resolve()
+    )
     launcher = root / "bin" / "factory"
     deployment_path = root / "deployment.json"
     policy_path = root / "host-policy.json"

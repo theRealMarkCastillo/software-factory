@@ -102,7 +102,7 @@ merging, so overrides cannot conceal unsafe input. Security-sensitive paths must
 not contain unresolved interpolation. Bind sources under a home directory are
 rejected in absolute form. A repository-relative source is allowed only when the
 subject checkout is itself nested below a user home directory
-(`/Users/<user>/...` or `/home/<user>/...`) and the source is an existing
+(a platform user-home path) and the source is an existing
 ordinary subtree: it may not resolve to the repository root, name or contain a
 credential/metadata subtree (`.env*`, `.git`, `.ssh`, ...), or contain a symlink
 that points at the repository root, outside the repository, or into a sensitive

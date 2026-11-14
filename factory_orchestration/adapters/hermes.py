@@ -95,6 +95,27 @@ PROVIDER_ENV = frozenset(
     }
 )
 
+# Providers supported by the disposable API-key-only reviewer. OAuth providers
+# intentionally have no mapping, even if unrelated API keys are present.
+REVIEW_PROVIDER_KEYS = {
+    "custom": ("OPENAI_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "huggingface": ("HF_TOKEN",),
+    "kimi": ("KIMI_API_KEY", "MOONSHOT_API_KEY"),
+    "moonshot": ("MOONSHOT_API_KEY",),
+    "minimax": ("MINIMAX_API_KEY",),
+    "nvidia": ("NVIDIA_API_KEY",),
+    "nous": ("NOUS_API_KEY",),
+    "xai": ("XAI_API_KEY",),
+    "zai": ("ZAI_API_KEY",),
+}
+
+
 #: Names that must never reach a child. This is a *check*, not the mechanism:
 #: the mechanism is that the child environment starts from an empty mapping.
 FORBIDDEN_PREFIXES = (
@@ -926,6 +947,23 @@ class HermesReviewer:
         artifacts: str,
         timeout_s: int,
     ) -> tuple[WorkerHandle, ReviewResult | None]:
+        sandboxed = bool(self.review_model and hasattr(self.attestor, "spec_for"))
+        review_credentials: dict[str, str] = {}
+        if sandboxed:
+            provider = self.review_provider or "custom"
+            available = {**os.environ, **dict(self.provider_env)}
+            for name in REVIEW_PROVIDER_KEYS.get(provider, ()):
+                value = available.get(name, "").strip()
+                if name in PROVIDER_ENV and value:
+                    review_credentials[name] = value
+                    break
+            if not review_credentials:
+                raise OrchestrationError(
+                    "review_credentials_unavailable",
+                    f"review not-run: provider {provider!r} has no available API-key credential; "
+                    "select an API-key provider with --review-provider/--review-model/--review-base-url "
+                    "and configure its key in the provider profile or environment; OAuth is unsupported",
+                )
         attestation = self.attestor.attest(
             reviewer=reviewer, candidate=workspace, evidence=artifacts
         )
@@ -945,7 +983,6 @@ class HermesReviewer:
         # workspace block reaches the prompt, and the assignment names
         # /evidence paths only.
         agent_cwd = str(workspace)
-        sandboxed = bool(self.review_model and hasattr(self.attestor, "spec_for"))
         if sandboxed:
             from .reviewer_sandbox import prepare_sandbox
 
@@ -961,7 +998,7 @@ class HermesReviewer:
                 provider=self.review_provider or "custom",
                 api_mode=self.review_api_mode,
                 api_key=None,
-                env_values=dict(self.provider_env),
+                env_values={},
             )
             self.attestor.verify_terminal(spec)
         prompt = _review_prompt(candidate_sha, base_sha, spec_digest, evidence_digest)
@@ -985,7 +1022,10 @@ class HermesReviewer:
             home=attestation.home,
             tmpdir=directory,
             executable=self.worker.executable,
-            extra={**dict(self.worker.extra_env), **dict(self.provider_env)},
+            extra={
+                **dict(self.worker.extra_env),
+                **(review_credentials if sandboxed else dict(self.provider_env)),
+            },
         )
         (directory / "attestation.json").write_text(
             json.dumps(attestation.as_dict(), indent=2, sort_keys=True) + "\n"

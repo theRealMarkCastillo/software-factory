@@ -7,7 +7,8 @@ admissions, or touches protected workloads.
 ## Install (development / pilot host)
 
 ```sh
-cd ~/software-factory-langgraph   # feature worktree
+cd /path/to/software-factory   # engine checkout
+export FACTORY_OPS_ROOT="${FACTORY_OPS_ROOT:-$HOME/git/software-factory-ops}"
 uv sync --extra orchestration --locked
 ```
 
@@ -70,12 +71,12 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration run \
   "repository": "/abs/repo",
   "workspace_path": "/abs/repo-worktree",
   "immutable_base_sha": "<40-hex>",
-  "spec_reference": "/abs/spec.md",
+  "spec_reference": "/abs/repo/spec.md",
   "spec_digest": "sha256:<64 hex>",
   "template_id": "bounded-card-v1",
   "worker_profile": "factory-runner",
   "reviewer_profile": "factory-qa",
-  "acceptance_argv": ["~/git/software-factory-ops/bin/factory", "run", "..."],
+  "acceptance_argv": ["<expanded FACTORY_OPS_ROOT>/bin/factory", "run", "..."],
   "acceptance_artifacts": "/abs/artifacts",
   "engine_release_reference": "installed:/path@sha256:...",
   "engine_fingerprint": "sha256:<64 hex>",
@@ -86,6 +87,28 @@ factory-orchestrate --state-dir ~/.hermes/factory-orchestration run \
 
 The command prints a JSON `DriveResult` (`status`, `stage`, `awaiting`). An
 `awaiting` result is a persisted wait: the process has exited.
+
+The installed launcher defaults to `$FACTORY_OPS_ROOT/bin/factory`; when the
+variable is unset, the ops root is `$HOME/git/software-factory-ops`. Defaults
+are resolved when used, not when modules are imported. `--launcher` overrides
+the CLI default. JSON argv values do not expand shell variables: substitute the
+absolute ops root into the example assignment before use.
+
+Admission refuses `invalid_assignment` before worker, acceptance or review
+effects unless `spec_reference` resolves inside `repository` or `workspace_path`,
+names a regular tracked file at `immutable_base_sha`, and the SHA-256 of that
+base blob equals `spec_digest`. Symlinks escaping those roots are refused. Keep
+the spec in the candidate tree so the reviewer can read it under
+`/evidence/candidate`; an external operator-only spec is not admissible.
+
+The sandbox reviewer is **API-key-only**. OAuth-only providers (including
+`openai-codex`), unmapped providers and missing/empty API keys are not launched.
+The run holds with `review_credentials_unavailable` and a not-run review record,
+not a verdict; no repair is consumed and completion is not authorized. Select
+an API-key provider using `--review-provider`, `--review-model` and
+`--review-base-url`, and configure its allowlisted key in the selected
+`--review-provider-profile` or the process environment. Keys are never included
+in diagnostics or persisted in the disposable review home.
 
 Independent review is refusal-by-default. To use the enforced R2-A reviewer,
 pass `--reviewer-sandbox` (plus `--reviewer-root`, and either
@@ -184,7 +207,7 @@ claim is made; the pilot produces the first observed values.
 
 ```sh
 uv run --extra orchestration python scripts/langgraph_pilot_acceptance.py --run \
-  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-installed-acceptance
+  --scratch "$HOME/.cache/factory/lg-installed-acceptance"
 ```
 
 The script builds a disposable repository (one busybox service, no host ports,
@@ -204,7 +227,7 @@ separate acceptance below uses the real adapters:
 
 ```sh
 uv run --extra orchestration python scripts/langgraph_hermes_acceptance.py --run \
-  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-hermes-acceptance
+  --scratch "$HOME/.cache/factory/lg-hermes-acceptance"
 ```
 
 It executes one `factory-card/v1` graph whose implementation step is a real
@@ -222,7 +245,7 @@ A real-provider review is exercised separately and reproducibly:
 .venv/bin/python scripts/live_review_fixture.py --run \
   --provider-profile factory-runner \
   --out docs/langgraph-hybrid/evidence/reviewer-sandbox \
-  --scratch ~/.hermes/profiles/factory-runner/cache/scratch/lg-live-review
+  --scratch "$HOME/.cache/factory/lg-live-review"
 ```
 
 The script builds a disposable candidate/evidence fixture and runs the

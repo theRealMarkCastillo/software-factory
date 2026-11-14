@@ -6,11 +6,34 @@ attestation proves a container boundary for its tool effects. The refusal
 default is preserved for every other path, and the claim is deliberately narrower
 than "the agent is contained" (residuals below).
 
-Provenance: engine branch `feat/langgraph-hybrid-orchestration`, worktree
-`~/software-factory-langgraph`; Hermes
+Provenance: engine branch `feat/langgraph-hybrid-orchestration`; Hermes
 `v0.23.0+689.ga9ff979` (`~/.hermes/hermes-agent` at `a9ff9799e273`). Design
 inputs: `t_2abae28a` v2 (`ARCHITECTURE_1.md`, `DESIGN-VERDICT-v2.md`,
 `REVIEW-RESPONSE.md`).
+
+## Admission and provider prerequisites
+
+The installed launcher uses `$FACTORY_OPS_ROOT/bin/factory`, defaulting to
+`$HOME/git/software-factory-ops/bin/factory` when the variable is unset. Resolve
+this value at use time; do not bake a host-specific path into assignments.
+
+The spec must resolve inside the repository or candidate workspace and be a
+regular tracked file at the immutable base commit. Its base blob's SHA-256 must
+equal `spec_digest` (as must the readable file). Outside specs, untracked-at-base
+specs, digest mismatches and symlink escapes are refused as `invalid_assignment`
+before any worker, acceptance or review effect. The reviewer reads the spec
+from `/evidence/candidate`, not an operator-only host path.
+
+Reviewer authentication is **API-key-only**: sandbox homes cannot carry OAuth
+logins. Before sandbox attestation or launch, the adapter resolves the selected
+provider's allowlisted key from the provider profile or process environment.
+OAuth-only providers such as `openai-codex`, unmapped providers and empty keys
+produce `review_credentials_unavailable`, with a not-run review record. The run
+holds without a verdict, repair consumption or completion. Fix the endpoint
+with `--review-provider`, `--review-model` and `--review-base-url` naming an
+API-key provider, and configure that provider's key. Keys remain in the host-side
+client environment, never in diagnostics, durable receipts or the disposable
+review home's files, and never in the tool container.
 
 ## What changed
 

@@ -14,7 +14,7 @@ def home_checkout():
     """A real checkout nested below a user home directory.
 
     The bind policy only authorizes relative mounts for repositories nested
-    below ``/Users/<user>`` or ``/home/<user>``, so pytest's system temp tree
+    below a platform user-home directory, so pytest's system temp tree
     (``/private/var/...`` on macOS) cannot exercise the allowed branch. The
     fixture lives under the operator scratch area and is removed afterwards.
     """

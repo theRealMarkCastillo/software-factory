@@ -34,6 +34,7 @@ REASON_CODES = frozenset(
         "review_inconclusive",
         "review_scope_violation",
         "review_unavailable",
+        "review_credentials_unavailable",
         "gate_unavailable",
         "capability_unenforced",
     }

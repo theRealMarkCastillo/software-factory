@@ -7,7 +7,9 @@ run), and every call validates the current attempt before any effect.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -75,6 +77,76 @@ def current_state(deps: Deps, thread: str) -> dict:
         return _graph_state(graph, {"configurable": {"thread_id": thread}})
 
 
+def _validate_spec_visibility(assignment: RunAssignment) -> None:
+    """Require a reviewer-visible regular spec blob at the immutable base."""
+
+    try:
+        spec = Path(assignment.spec_reference).resolve(strict=True)
+        roots = (
+            Path(assignment.repository).resolve(strict=True),
+            Path(assignment.workspace_path).resolve(),
+        )
+        relative = next(
+            (spec.relative_to(root) for root in roots if spec.is_relative_to(root)),
+            None,
+        )
+        if relative is None or not spec.is_file():
+            raise ValueError("spec must resolve inside repository or workspace_path")
+        argv = [
+            "git",
+            "-C",
+            assignment.repository,
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "--no-optional-locks",
+        ]
+        entry = subprocess.run(
+            [
+                *argv,
+                "ls-tree",
+                "-z",
+                assignment.immutable_base_sha,
+                "--",
+                relative.as_posix(),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        ).stdout
+        if not entry.startswith((b"100644 blob ", b"100755 blob ")):
+            raise ValueError(
+                "spec must be a tracked regular file at immutable_base_sha"
+            )
+        blob = subprocess.run(
+            [
+                *argv,
+                "cat-file",
+                "blob",
+                f"{assignment.immutable_base_sha}:{relative.as_posix()}",
+            ],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        ).stdout
+        expected = assignment.spec_digest
+        if "sha256:" + hashlib.sha256(blob).hexdigest() != expected:
+            raise ValueError("spec_digest must match the immutable base blob")
+        if "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest() != expected:
+            raise ValueError("spec_digest must match the readable spec")
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        raise OrchestrationError(
+            "invalid_assignment",
+            "reviewer-visible spec required: "
+            + (
+                str(exc)
+                if isinstance(exc, ValueError)
+                else "spec or base blob is unreadable"
+            ),
+        ) from None
+
+
 def drive(
     deps: Deps,
     assignment: RunAssignment,
@@ -89,6 +161,7 @@ def drive(
     existing = store.run(thread)
     if existing is None:
         AdmissionPolicy.load(deps.state_dir).check(assignment.card_id)
+        _validate_spec_visibility(assignment)
 
     view = deps.board.view(attempt)
     if not view.current(attempt):

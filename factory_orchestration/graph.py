@@ -93,6 +93,7 @@ def _route_for(reason: str) -> str:
         "owner_grant_absent": "hold_operator",
         "review_scope_violation": "hold_operator",
         "review_unavailable": "hold_infrastructure",
+        "review_credentials_unavailable": "hold_infrastructure",
         "invalid_assignment": "hold_operator",
         "version_mismatch": "hold_operator",
         "workspace_conflict": "hold_operator",
@@ -733,18 +734,32 @@ def build_graph(deps: Deps, checkpointer=None):
                 )
             return _apply_review(state, key, review, {"operations": operations})
         deps.store.mark_operation(key, "submitted")
-        handle, inline = deps.reviewer.submit(
-            operation_key=key,
-            attempt=_attempt(state),
-            reviewer=state["reviewer_profile"],
-            workspace=state["workspace_path"],
-            candidate_sha=state["candidate_sha"],
-            base_sha=state["immutable_base_sha"],
-            spec_digest=state["spec_digest"],
-            evidence_digest=state["evidence_digest"],
-            artifacts=state["evidence_reference"],
-            timeout_s=deps.review_timeout_s,
-        )
+        try:
+            handle, inline = deps.reviewer.submit(
+                operation_key=key,
+                attempt=_attempt(state),
+                reviewer=state["reviewer_profile"],
+                workspace=state["workspace_path"],
+                candidate_sha=state["candidate_sha"],
+                base_sha=state["immutable_base_sha"],
+                spec_digest=state["spec_digest"],
+                evidence_digest=state["evidence_digest"],
+                artifacts=state["evidence_reference"],
+                timeout_s=deps.review_timeout_s,
+            )
+        except OrchestrationError as exc:
+            if exc.reason == "review_credentials_unavailable":
+                deps.store.mark_operation(
+                    key,
+                    "failed",
+                    detail=exc.detail,
+                    receipt={
+                        "status": "not-run",
+                        "reason": exc.reason,
+                        "detail": exc.detail,
+                    },
+                )
+            raise
         deps.store.mark_operation(key, "submitted", request_id=handle.request_id)
         operations[key].update({"state": "submitted", "request_id": handle.request_id})
         updates = {"operations": operations, "reviewer_request_id": handle.request_id}

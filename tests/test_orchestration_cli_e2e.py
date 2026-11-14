@@ -134,6 +134,8 @@ def _build(tmp_path: Path) -> dict:
     repo.mkdir()
     (repo / "app.py").write_text("x = 1\n")
     (repo / ".env.example").write_text("A=1\n")
+    spec = repo / "spec.md"
+    spec.write_text("# bounded card\n")
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "add", "-A")
     _git(
@@ -154,8 +156,7 @@ def _build(tmp_path: Path) -> dict:
         check=True,
         capture_output=True,
     )
-    spec = tmp_path / "spec.md"
-    spec.write_text("# bounded card\n")
+
     digest = "sha256:" + __import__("hashlib").sha256(spec.read_bytes()).hexdigest()
     artifacts = tmp_path / "artifacts"
     state = tmp_path / "state"

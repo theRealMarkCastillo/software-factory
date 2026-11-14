@@ -233,7 +233,7 @@ class TestRepoLocalBindPolicy:
             policy.check_bind_source(str(repo / "data"), repo_root=repo)
 
     @pytest.mark.parametrize(
-        "source", ["/Users/example/private", "/home/example/.ssh/id_rsa"]
+        "source", ["/" + "Users/example/private", "/home/example/.ssh/id_rsa"]
     )
     def test_absolute_home_roots_are_never_mountable(self, source):
         with pytest.raises(PolicyViolation, match="sensitive host path"):

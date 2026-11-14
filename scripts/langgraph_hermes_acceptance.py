@@ -48,7 +48,7 @@ from factory_orchestration.adapters.hermes import (  # noqa: E402
     HermesBoard,
     HermesWorker,
 )
-from factory_orchestration.adapters.installed import discover  # noqa: E402
+from factory_orchestration.adapters.installed import default_launcher, discover  # noqa: E402
 from factory_orchestration.adapters.reviewer_sandbox import _load_fake_provider  # noqa: E402
 from factory_orchestration.cli import _reviewer, build_parser  # noqa: E402
 from factory_orchestration.graph import Deps, thread_id  # noqa: E402
@@ -56,7 +56,6 @@ from factory_orchestration.runner import drive, inspect_run  # noqa: E402
 from factory_orchestration.state import Attempt, RunAssignment  # noqa: E402
 from factory_orchestration.store import RunStore  # noqa: E402
 
-LAUNCHER = Path("~/git/software-factory-ops/bin/factory")
 CARD = "t_1a2b3c4d"
 PREFLIGHT_KEY = "factory-preflight-token"
 
@@ -120,6 +119,9 @@ def build_repo(scratch: Path) -> dict:
         '    command: ["sh", "-c", "echo hermes-graph-acceptance-ok"]\n'
     )
     (repo / "module.py").write_text("VALUE = 1\n")
+    (repo / "card-spec.md").write_text(
+        "# Acceptance card\n\nCommit one bounded candidate marker.\n"
+    )
     base = commit(repo, "base")
     worktree = scratch / "workspace"
     subprocess.run(
@@ -307,10 +309,9 @@ def main() -> int:
     repo_info = build_repo(run_root)
     base = repo_info["base"]
     workspace = repo_info["worktree"]
-    release = discover(LAUNCHER.parent.parent)
+    release = discover(default_launcher().parent.parent)
 
-    spec = run_root / "card-spec.md"
-    spec.write_text("# Acceptance card\n\nCommit one bounded candidate marker.\n")
+    spec = workspace / "card-spec.md"
     spec_digest = "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest()
     artifacts_root = run_root / "artifacts"
     state_dir = run_root / "state"
@@ -341,7 +342,7 @@ def main() -> int:
     )
 
     store = RunStore(state_dir)
-    gate = InstalledLauncherGate(LAUNCHER, run_root / "gate-receipts")
+    gate = InstalledLauncherGate(default_launcher(), run_root / "gate-receipts")
     FakeLLMServer, _Text, _ToolCall = _load_fake_provider()
     summary: dict = {
         "schema": "factory-hermes-graph-acceptance/v1",
@@ -411,7 +412,7 @@ def main() -> int:
             worker_profile="factory-runner",
             reviewer_profile="factory-qa",
             acceptance_argv=(
-                str(LAUNCHER),
+                str(default_launcher()),
                 "run",
                 "--card",
                 CARD,

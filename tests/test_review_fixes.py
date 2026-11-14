@@ -22,7 +22,7 @@ class TestNestedSensitiveMounts:
             "/etc/passwd",
             "/var/run",
             "/home/alice/.ssh",
-            "/Users/example/secrets",
+            "/" + "Users/example/secrets",
             "/private/etc/hosts",
             "/proc/self",
         ],

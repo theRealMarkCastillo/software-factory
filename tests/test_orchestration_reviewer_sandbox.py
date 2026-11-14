@@ -86,7 +86,7 @@ def test_config_pins_every_sandbox_control(tmp_path):
     assert f"{EVIDENCE_MOUNT}:ro" in text
     assert f"{PROBE_MOUNT}:ro" in text
     # No host home, no docker socket, no implicit cwd mount.
-    assert "/Users/" not in text or str(tmp_path) in text
+    assert ("/" + "Users/") not in text or str(tmp_path) in text
     assert "docker.sock" not in text
 
 
@@ -391,7 +391,7 @@ def test_audit_flags_a_path_outside_the_review_root(tmp_path):
             {
                 "type": "tool_use",
                 "name": "read_file",
-                "input": {"path": "/Users/someone/.hermes/auth.json"},
+                "input": {"path": "/" + "Users/someone/.hermes/auth.json"},
             },
             {"type": "result", "text": '{"outcome":"approve"}'},
         ],

@@ -245,7 +245,7 @@ SENSITIVE_HOST_ROOTS = (
 
 # System roots a relative source may never resolve into. The narrow exception
 # for repository-relative mounts covers only checkouts nested below a user's
-# home directory (``/Users/<user>/...`` or ``/home/<user>/...``); a checkout
+# home directory (platform user-home paths); a checkout
 # rooted at or under one of these system paths gets no relative-mount
 # exception. ``/Users`` and ``/home`` themselves are rejected as repository
 # roots by the immediate-home check.
@@ -327,7 +327,7 @@ def assert_safe_repo_root(repo_root: Path | str) -> None:
 
     A subject repository may live in an ordinary checkout, but it may not be
     the host root, a sensitive host root, the operator's home directory, or an
-    immediate home directory (``/Users/<user>``). The runner calls this before
+    immediate platform home directory. The runner calls this before
     Compose validation so a sensitive ``repo_path`` never reaches file
     resolution or Docker.
     """
@@ -494,7 +494,7 @@ def check_bind_source(
 
     Relative sources are resolved against the repo root. The exception is
     deliberately narrow: the repo must be a real checkout nested below a user
-    home directory (``/Users/<user>/...`` or ``/home/<user>/...``). The
+    home directory (platform user-home paths). The
     source must exist, stay inside the repo root (catching traversal and
     symlink escapes), not resolve to the repo root itself, and not name or
     contain a credential/VCS subtree. Anything else -- including repositories
@@ -514,7 +514,7 @@ def check_bind_source(
             raise PolicyViolation(
                 f"{where}relative bind-mount source '{source}' is only allowed "
                 f"for a checkout nested under a user home directory "
-                f"(/Users/<user>/... or /home/<user>/...); repo root '{root}' "
+                f"(a platform user-home path); repo root '{root}' "
                 f"is not"
             )
         resolved = (root / src_path).resolve()

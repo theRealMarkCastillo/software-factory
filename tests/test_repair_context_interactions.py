@@ -1,6 +1,7 @@
 """Rule interactions at the repair diagnostic boundary (synthetic values only)."""
 
 import json
+import re
 from dataclasses import replace
 
 import pytest
@@ -205,23 +206,26 @@ def _occurrences(text, value):
         start = text.find(value, start + 1)
 
 
-@pytest.mark.parametrize("seed_value", range(40))
-@pytest.mark.parametrize("cut_window", [False, True])
-def test_every_original_match_is_covered_and_the_rest_is_unchanged(
-    monkeypatch, seed_value, cut_window
-):
-    """Seeded property: the output is the original with a span union replaced."""
+def _property_holds(seed_value, cut_window, setenv):
+    """Seeded span-union property. Returns only a static failure label or ""
+
+    so that a failure can never print text, environment values or matches.
+    The oracle is a per-character mask built by trying every rule at EVERY
+    start offset of the original text; it shares no scanning code with the
+    implementation.
+    """
+    import os
     import random
 
     from factory_orchestration import redaction
 
     rng = random.Random(seed_value)
     alphabet = "ab-K "
+    kinds = ["", "RSA ", "EC "]
     pieces = [
-        "-----BEGIN ",
+        *["-----BEGIN " + kind + "PRIVATE " + "KEY-----\n" for kind in kinds],
+        *["-----END " + kind + "PRIVATE " + "KEY-----\n" for kind in kinds],
         "PRIVATE " + "KEY-----",
-        "-----END ",
-        "RSA ",
         "s" + "k-" + "a" * 22,
         "Bearer " + "b" * 22,
         "AK" + "IA" + "B" * 16,
@@ -232,32 +236,179 @@ def test_every_original_match_is_covered_and_the_rest_is_unchanged(
         start = rng.randrange(0, max(1, len(source) - 8))
         value = source[start : start + rng.randint(8, 12)]
         if len(value) >= 8:
-            monkeypatch.setenv(f"FIXTURE_{index}_TOKEN", value)
+            setenv(f"FIXTURE_{index}_TOKEN", value)
     text = "".join(
         rng.choice(pieces + ["".join(rng.choices(alphabet, k=rng.randint(1, 14)))])
-        for _ in range(rng.randint(3, 14))
+        for _ in range(rng.randint(3, 16))
     )
-    spans = redaction._redaction_spans(text, cut_window=cut_window)
-    assert spans == sorted(spans) and all(
-        a[1] <= b[0] for a, b in zip(spans, spans[1:])
-    )
-
-    def covered(begin, end):
-        return any(a <= begin and end <= b for a, b, _ in spans)
-
-    import os
-
+    mask = [False] * len(text)
     for name, value in os.environ.items():
         if len(value) >= 8 and redaction._ENV_NAME.search(name):
-            # No message: a failure must never print an environment value.
-            assert all(covered(*span) for span in _occurrences(text, value))
+            for begin, end in _occurrences(text, value):
+                mask[begin:end] = [True] * (end - begin)
+    pem_mask = [False] * len(text)
     for label, pattern in redaction._SHAPES:
-        for match in pattern.finditer(text):
-            begin = match.end(1) if label == "bearer" else match.start()
-            assert covered(begin, match.end()), label
+        for offset in range(len(text)):
+            match = pattern.match(text, offset)
+            if match:
+                begin = match.end(1) if label == "bearer" else match.start()
+                mask[begin : match.end()] = [True] * (match.end() - begin)
+                if label == "pem":
+                    pem_mask[begin : match.end()] = [True] * (match.end() - begin)
+    if cut_window:
+        orphans = [
+            match.end()
+            for match in re.finditer(
+                r"^-----END [A-Z ]*PRIVATE KEY-----\r?$", text, re.M
+            )
+            if not pem_mask[match.start()]
+        ]
+        if orphans:
+            mask[: max(orphans)] = [True] * max(orphans)
+
+    spans = redaction._redaction_spans(text, cut_window=cut_window)
+    if spans != sorted(spans) or any(a[1] > b[0] for a, b in zip(spans, spans[1:])):
+        return "spans are not sorted and disjoint"
+    covered = [False] * len(text)
+    for begin, end, _ in spans:
+        covered[begin:end] = [True] * (end - begin)
+    if covered != mask:
+        return "span union differs from the independent character mask"
     expected, cursor = [], 0
     for begin, end, label in spans:
         expected += [text[cursor:begin], f"[REDACTED:{label}]"]
         cursor = end
     expected.append(text[cursor:])
-    assert redact_diagnostic(text, cut_window=cut_window) == "".join(expected)
+    if redaction.redact_diagnostic(text, cut_window=cut_window) != "".join(expected):
+        return "rendered output is not the original with exactly the spans replaced"
+    return ""
+
+
+@pytest.mark.parametrize("seed_value", range(60))
+@pytest.mark.parametrize("cut_window", [False, True])
+def test_every_original_match_is_covered_and_the_rest_is_unchanged(
+    monkeypatch, seed_value, cut_window
+):
+    problem = _property_holds(seed_value, cut_window, monkeypatch.setenv)
+    if problem:
+        # Static label only: never the text, a value or a match object.
+        pytest.fail(problem, pytrace=False)
+
+
+def _nested(kind_outer="RSA ", kind_inner="", close_inner=False):
+    lines = [
+        "-----BEGIN " + kind_outer + "PRIVATE " + "KEY-----",
+        "-----BEGIN " + kind_inner + "PRIVATE " + "KEY-----",
+        BODY,
+        "-----END " + kind_outer + "PRIVATE " + "KEY-----",
+        "nested-" + "tail-canary",
+    ]
+    if close_inner:
+        lines.append("-----END " + kind_inner + "PRIVATE " + "KEY-----")
+        lines.append("after stays")
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize("cut_window", [False, True])
+@pytest.mark.parametrize("close_inner", [False, True])
+def test_nested_and_crossing_pem_blocks_are_fully_removed(cut_window, close_inner):
+    out = redact_diagnostic(_nested(close_inner=close_inner), cut_window=cut_window)
+    assert "tail-canary" not in out and BODY not in out
+    assert out.endswith("after stays") == close_inner
+
+
+def test_nested_pem_never_reaches_a_hold(tmp_path):
+    s = seed(tmp_path)
+    s["gate"].run_acceptance = lambda **kw: GateOutcome(
+        "unavailable", reason="gate_unavailable", detail=_nested()
+    )
+    result = run(s)
+    assert result.state["status"] == "held"
+    assert "tail-canary" not in json.dumps(result.state)
+
+
+@pytest.mark.parametrize("channel", ["detail", "log", "review"])
+def test_nested_pem_never_reaches_prompt_or_store(tmp_path, channel):
+    s = seed(tmp_path)
+    requests = capture(s)
+    if channel == "review":
+        original = s["reviewer"].submit
+
+        def submit(**kw):
+            s["reviewer"].outcome = "changes_required"
+            handle, review = original(**kw)
+            return handle, replace(review, comment=_nested())
+
+        s["reviewer"].submit = submit
+    else:
+        log = s["artifacts"] / "acceptance.log"
+        log.write_text("ERROR: boom\n" + _nested() + "\n")
+        s["gate"].run_acceptance = lambda **kw: GateOutcome(
+            "fail",
+            reason="test_failed",
+            detail=_nested() if channel == "detail" else "failed",
+            log_reference=str(log) if channel == "log" else "",
+        )
+    result = run(s)
+    persisted = json.dumps(
+        {
+            "state": result.state,
+            "operations": s["deps"].store.operations(thread_id(s["assignment"])),
+        }
+    )
+    assert len(requests) >= 2
+    assert "tail-canary" not in persisted
+    assert all("tail-canary" not in request.prompt for request in requests)
+
+
+def test_a_failing_property_never_prints_an_environment_value(tmp_path):
+    """Break rendering on purpose in a child pytest; the value must not appear."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    sentinel = "b" * 22
+    probe = tmp_path / "test_probe.py"
+    probe.write_text(
+        "import pytest\n"
+        "from factory_orchestration import redaction\n"
+        "import test_repair_context_interactions as subject\n"
+        "def test_probe(monkeypatch):\n"
+        "    monkeypatch.setattr(redaction, 'redact_diagnostic', lambda t, **k: t)\n"
+        "    failures = [\n"
+        "        subject._property_holds(seed, False, monkeypatch.setenv)\n"
+        "        for seed in range(60)\n"
+        "    ]\n"
+        "    assert any(failures), 'mutation was not detected'\n"
+        "    pytest.fail(next(f for f in failures if f), pytrace=False)\n"
+    )
+    tests_dir = Path(__file__).resolve().parent
+    env = dict(os.environ, FIXTURE_PROBE_TOKEN=sentinel)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(tests_dir), str(tests_dir.parent), env.get("PYTHONPATH", "")]
+    )
+    xml = tmp_path / "junit.xml"
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--rootdir",
+            str(tmp_path),
+            f"--junitxml={xml}",
+            str(probe),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=120,
+    )
+    assert child.returncode == 1
+    assert "rendered output is not the original" in child.stdout
+    for output in (child.stdout, child.stderr, xml.read_text()):
+        assert sentinel not in output

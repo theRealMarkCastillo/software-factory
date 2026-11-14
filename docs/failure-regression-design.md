@@ -38,8 +38,8 @@ Status: accepted by the operator with the binding corrections below; design card
    No unrelated evidence refactor. Verifier/promoter must still reject replay output.
 
 Source base
-`f61afd4f819bc58a25aedf495c560a81d98890f8`; plan
-`arx-docs/specs/2026-10-23-factory-failure-regression-plan.md`. Adds no
+`f61afd4f819bc58a25aedf495c560a81d98890f8`; the source plan is an
+operator-local document and is not published. Adds no
 acceptance path, no second gate, no Docker execution.
 
 ## 1. Problem, from code and one real incident

@@ -99,7 +99,7 @@ def test_live_review_entrypoint_binds_real_submit_before_attestation(
         return real_submit(self, **kwargs)
 
     def attest(self, *, reviewer, candidate, evidence):
-        assert observed["spec_path"] == "/evidence/artifacts/spec.md"
+        assert observed["spec_path"] == "/evidence/evidence/spec.md"
         assert (Path(evidence) / "spec.md").is_file()
         assert observed["changed_files"] == ("module.py",)
         assert observed["changed_files_truncated"] == 0

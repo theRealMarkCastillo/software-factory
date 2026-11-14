@@ -420,6 +420,8 @@ audit = [
     { name = "pip-audit" },
 ]
 dev = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-sqlite" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -431,6 +433,8 @@ orchestration = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "langgraph" },
+    { name = "langgraph-checkpoint-sqlite" },
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -439,7 +443,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "langgraph", marker = "extra == 'dev'", specifier = ">=1.2,<2" },
     { name = "langgraph", marker = "extra == 'orchestration'", specifier = ">=1.2,<2" },
+    { name = "langgraph-checkpoint-sqlite", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
     { name = "langgraph-checkpoint-sqlite", marker = "extra == 'orchestration'", specifier = ">=3.1,<4" },
     { name = "pip-audit", marker = "extra == 'audit'", specifier = ">=2.7" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
@@ -451,6 +457,8 @@ provides-extras = ["dev", "audit", "orchestration"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "langgraph", specifier = ">=1.2,<2" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=3.1,<4" },
     { name = "pip-audit", specifier = ">=2.7" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=5" },

@@ -99,7 +99,7 @@ class Pilot:
         self.artifacts = self.root / "artifacts"
         self.state = self.root / "state"
         self.evidence = self.root / "evidence"
-        self.spec = self.root / "spec.md"
+        self.spec = self.workspace / "spec.md"
         self.assignment = self.root / "assignment.json"
         self.status_path = self.root / "status.json"
         self.log_path = self.root / "pilot.log"
@@ -204,6 +204,7 @@ class Pilot:
         (self.repo / ".gitignore").write_text(
             "__pycache__/\n*.pyc\n.coverage\ncoverage.json\n.pytest_cache/\n*.log\n"
         )
+        (self.repo / "spec.md").write_text(SPEC_TEXT)
         self.git("init", "-q", "-b", "main", cwd=self.repo)
         self.git("add", "-A", cwd=self.repo)
         self.git(
@@ -227,7 +228,7 @@ class Pilot:
             base,
             cwd=self.repo,
         )
-        self.spec.write_text(SPEC_TEXT)
+        # spec.md was committed at the base and is now visible in the workspace.
         self.inject_marker.write_text("deliberate acceptance failure for one repair\n")
         wrapper = self.write_acceptance_wrapper()
         return base, wrapper

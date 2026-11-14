@@ -1,7 +1,7 @@
 # Contributing
 
-Use uv with the committed lockfile. Python 3.12 is the local default; CI checks
-Python 3.11, 3.12, and 3.13:
+Use uv with the committed lockfile. Python 3.12 is the local default.
+The local test suite and Ruff checks are the contributor gate:
 
 ```sh
 uv sync --locked
@@ -13,8 +13,16 @@ git diff --check
 
 For a targeted dependency update, run `uv lock --upgrade-package <package>`,
 then `uv sync --locked` and the checks above. Commit `uv.lock` and any accompanying
-`pyproject.toml` changes together. CI uses uv 0.11.6 and rejects a stale lockfile.
+`pyproject.toml` changes together. The local gate rejects a stale lockfile.
 The README also documents installation with pip.
+
+The public-tree leak check scans every tracked text file. It checks the current
+home directory, user name, and token shapes. To add private installation-specific
+identifiers, set `FACTORY_LEAK_DENYLIST` to a local UTF-8 file containing one literal
+identifier per line (blank lines and `#` comments are ignored). Without that
+variable, only the additional deny-list is skipped. Never commit the local file;
+use a location outside the checkout. Diagnostics report file and line, not the
+matched value.
 
 Keep behavior changes narrow. For safety or evidence changes, first add a failing
 regression at the public runner boundary, then implement the fix. Mock Docker for

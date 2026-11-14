@@ -1,6 +1,6 @@
 # Failure-to-regression design: incident intake and diagnostic replay
 
-Status: accepted by Arx with the binding corrections below; design card `t_9ab43e5e`.
+Status: accepted by the operator with the binding corrections below; design card `t_9ab43e5e`.
 
 ## Binding operator corrections (override conflicting text below)
 

@@ -66,6 +66,7 @@ def test_execute_prepares_before_it_writes_status(tmp_path, monkeypatch):
     def fake_prepare():
         order.append("prepare")
         pilot.root.mkdir(parents=True)
+        pilot.spec.parent.mkdir(parents=True, exist_ok=True)
         pilot.spec.write_text("# spec\n")
         return "0" * 40, pilot.root / "acceptance.py"
 

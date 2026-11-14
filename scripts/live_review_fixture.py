@@ -246,6 +246,19 @@ def run_review(args, fixture: dict) -> dict:
         candidate_sha=candidate,
         base_sha=fixture["base"],
         spec_digest=spec_digest,
+        spec_path="/evidence/evidence/spec.md",
+        changed_files=tuple(
+            name
+            for name in git(
+                fixture["worktree"],
+                "diff",
+                "--name-only",
+                "-z",
+                f"{fixture['base']}..{candidate}",
+            ).split("\0")
+            if name
+        ),
+        changed_files_truncated=0,
         evidence_digest=evidence_digest,
         artifacts=str(fixture["evidence"]),
         timeout_s=args.timeout,

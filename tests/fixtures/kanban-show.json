@@ -1,5 +1,5 @@
 {
-  "_source": "hermes kanban --board software-factory show t_80fe7fec --json (fields trimmed; captured 2026-11-08)",
+  "_source": "Synthetic identifiers; shape from hermes kanban --board software-factory show --json",
   "runs": [
     {
       "id": 356,
@@ -13,10 +13,10 @@
     "claim_expires": null,
     "claim_lock": null,
     "current_run_id": null,
-    "id": "t_80fe7fec",
+    "id": "t_deadbeef",
     "max_runtime_seconds": 14400,
     "status": "running",
     "workspace_kind": "dir",
-    "workspace_path": "~/software-factory-engine"
+    "workspace_path": "/path/to/subject-repo"
   }
 }

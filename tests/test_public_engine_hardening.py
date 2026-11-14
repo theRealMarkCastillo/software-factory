@@ -62,10 +62,7 @@ def _public_source_leaks(root):
         data = path.read_bytes()
         if b"\0" in data:
             continue
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
+        text = data.decode("utf-8", errors="replace")
         for line_number, line in enumerate(text.splitlines(), 1):
             if personal.search(line) or secrets.search(line):
                 # Report locations only: do not echo leaked credentials into logs.

@@ -1,6 +1,6 @@
 # Evidence gate design: bind run evidence to guarded source promotion
 
-Status: accepted for implementation by Arx with the binding corrections below.
+Status: accepted for implementation by the operator with the binding corrections below.
 Design card `t_371b42bb`; this document alone is not runtime acceptance.
 
 ## Operator review corrections (override conflicting details below)
@@ -536,7 +536,7 @@ Order of work inside the card (fail-first, per `CONTRIBUTING.md`):
 ## 12. Recommended sequence
 
 1. **This card:** design + verdict artifact (done).
-2. **Engine implementation** (Arx-dispatched, goal mode, same branch): scope of §11 only.
+2. **Engine implementation** (orchestrator-dispatched, goal mode, same branch): scope of §11 only.
 3. **Independent QC at a frozen SHA** (separate profile, read-only): full suite, ruff,
    the §9 negative controls, mutation sweep, and a check that no ops/deploy/profile file
    changed.

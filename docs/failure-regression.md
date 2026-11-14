@@ -114,8 +114,8 @@ re-validates the stored record's recomputed ids and content, and renders:
   both-passing is not improvement;
 * `replay_request` as inert data that needs a separate explicit
   `--approve-execution` (Stage B);
-* `authorization: {"grants": [], "note": "no promotion, dispatch, deployment or
-  policy change"}` plus `declared_non_actions`.
+* `authorization: {"grants": [], "note": "no promotion, dispatch, deployment or policy change"}`
+  plus `declared_non_actions`.
 
 `proposal_id` is the sha256 of the canonical body, so re-running `propose`
 produces the same file and reports `duplicate`.

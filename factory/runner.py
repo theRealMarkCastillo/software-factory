@@ -309,7 +309,7 @@ def run_factory_card(
     fixture_paths: list[str] | None = None,
     run_gates: bool = True,
     mode: str | None = None,
-    base_ref: str = "main",
+    base_ref: str | None = None,
 ) -> RunResult:
     """
     Full sanctioned lifecycle for a factory Compose job:
@@ -386,13 +386,23 @@ def run_factory_card(
     # 1b. Capture the source and the immutable diff base BEFORE any gate runs,
     #     then run the gates against that captured base. Resolving the base only
     #     afterwards could not bind what was actually measured.
-    source_start = capture_source(repo)
-    base_info = resolve_base_info(repo, base_ref)
+    base_info = resolve_base_info(repo, "main" if base_ref is None else base_ref)
     if base_info["kind"] != "commit":
-        result.stage = "base_resolution"
-        result.error = f"cannot resolve diff base to a commit: {base_ref}"
-        result.duration_s = time.time() - start
-        return result
+        code = base_info.get("error", "base_not_found")
+        if base_ref is not None or code != "base_not_found":
+            result.stage = "base_resolution"
+            alternatives = ", ".join(base_info.get("alternatives", []))
+            result.error = (
+                f"{code}: cannot resolve diff base to a commit: {base_info['ref']}"
+            )
+            if alternatives:
+                result.error += f"; alternatives: {alternatives}"
+            result.duration_s = time.time() - start
+            return result
+        # Legacy omitted-main diagnostics retain execution and artifacts, but
+        # unresolved evidence still fails certification in the shared checker.
+        base_info = {"ref": "main", "kind": "unresolved", "sha": ""}
+    source_start = capture_source(repo)
 
     # Pre-Docker gates: fail closed BEFORE anything is built or run.
     result.gates_run = run_gates
@@ -728,7 +738,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--card", required=True)
     parser.add_argument("--repo", required=True)
     parser.add_argument(
-        "--base", default="main", help="Diff base ref (resolved once before gates)."
+        "--base",
+        default=None,
+        help="Diff base ref (default: main; resolved once before gates).",
     )
     parser.add_argument(
         "--compose",

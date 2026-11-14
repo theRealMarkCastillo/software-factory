@@ -249,6 +249,44 @@ def test_omitted_ambiguous_main_refused(subject, lifecycle, tmp_path, gates):
     refused(run(repo, tmp_path, run_gates=gates), lifecycle, "ambiguous_base")
 
 
+def test_cli_explicit_missing_main_refused(subject, lifecycle, tmp_path, capsys):
+    repo, _, _ = subject
+    git(repo, "branch", "-m", "trunk")
+    assert (
+        runner.main(
+            [
+                "--card",
+                "base-contract",
+                "--repo",
+                str(repo),
+                "--compose",
+                "compose.yml",
+                "--artifacts-root",
+                str(tmp_path / "artifacts"),
+                "--base",
+                "main",
+                "--no-gates",
+            ]
+        )
+        == 1
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["stage"] == "base_resolution"
+    assert "base_not_found" in result["error"]
+    assert result["artifacts_dir"] is None
+    assert lifecycle == []
+
+
+def test_api_omitted_unique_main(subject, lifecycle, tmp_path):
+    repo, _, head = subject
+    result = run(repo, tmp_path, run_gates=False)
+    manifest = json.loads(
+        (Path(result.artifacts_dir) / evidence.MANIFEST_FILENAME).read_text()
+    )
+    assert manifest["base"] == {"ref": "main", "kind": "commit", "sha": head}
+    assert lifecycle.count("compose") == 3
+
+
 def test_api_and_cli_default_none_and_help_main(subject, monkeypatch, capsys):
     assert (
         inspect.signature(runner.run_factory_card).parameters["base_ref"].default

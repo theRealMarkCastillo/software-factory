@@ -64,10 +64,22 @@ uv run --locked factory-run \
 ```
 
 Compose paths are repo-relative by default; absolute paths are also accepted.
-The runner accepts `--base <ref>` (default `main`). It resolves that ref once to a
-full commit before any gate, uses that commit for coverage and evidence, and
-refuses unknown refs before Docker. Use that same full SHA with
-`factory-verify --base <sha>`. A data-model gate runs when `data-model.yml` exists.
+The runner accepts `--base <ref>` (default `main`). Accepted spellings are a full
+40-hex commit ID, literal `HEAD`, an exact fully qualified `refs/...` name, or a
+simple name checked against `refs/heads/`, `refs/tags/`, and `refs/remotes/`.
+Exactly one candidate must exist; collisions are refused as `ambiguous_base`
+even when they point at the same commit. Fully qualified refs disambiguate.
+Annotated tags are peeled to commits. Abbreviated hex, revision expressions and
+reflog syntax are refused as `unsupported_base`; missing commits report
+`base_not_found`. Explicit invalid bases stop before gates, snapshots or Compose.
+
+Resolution happens once; coverage and evidence use the captured commit. Use that
+same full SHA with `factory-verify --base <sha>`. Omitting `--base` (API
+`base_ref=None`) retains legacy `main` behavior: a missing `main` permits the
+lifecycle and diagnostic artifacts, but unresolved evidence is rejected and can
+never certify. An ambiguous omitted `main` is refused before execution; explicit
+`--base main` with no `main` is also refused. A data-model gate runs when
+`data-model.yml` exists.
 With a subdirectory `--repo`, source cleanliness is scoped to that directory,
 while the candidate revision remains the enclosing repository's HEAD.
 

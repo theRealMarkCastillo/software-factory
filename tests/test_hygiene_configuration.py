@@ -33,7 +33,9 @@ def test_local_checks_are_the_only_contributor_gate():
 
 def test_design_docs_use_generic_roles():
     for name in ("evidence-gate-design.md", "failure-regression-design.md"):
-        assert not re.search(r"\b" + "Ar" + r"x\b", (ROOT / "docs" / name).read_text())
+        text = (ROOT / "docs" / name).read_text()
+        # Case-insensitive: also catches a private repository namespace.
+        assert not re.search(r"\b" + "ar" + r"x\b", text, re.IGNORECASE)
     rollout = (ROOT / "docs/langgraph-hybrid/rollout-2026-11-09.md").read_text()
     assert "build-" + "host.local" not in rollout
     assert "the " + "***" not in rollout

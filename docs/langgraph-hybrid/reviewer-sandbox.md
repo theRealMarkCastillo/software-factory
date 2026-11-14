@@ -13,9 +13,34 @@ inputs: `t_2abae28a` v2 (`ARCHITECTURE_1.md`, `DESIGN-VERDICT-v2.md`,
 
 ## Admission and provider prerequisites
 
-The installed launcher uses `$FACTORY_OPS_ROOT/bin/factory`, defaulting to
-`$HOME/git/software-factory-ops/bin/factory` when the variable is unset. Resolve
-this value at use time; do not bake a host-specific path into assignments.
+The public `factory` command dispatches `run`, `verify`, `promote`, `audit`,
+`coverage`, `datamodel`, `learning` and `orchestrate`; `factory verify --help`
+prints the verifier's help. The eight existing `factory-*` entry points remain.
+Orchestration resolves its default launcher at use time, in this order:
+
+1. `FACTORY_LAUNCHER`, if set: an absolute path to an executable file is required;
+   invalid values (including empty values) are errors, never silent fallbacks.
+2. `<ops root>/bin/factory` if that file exists. The ops root is `FACTORY_OPS_ROOT`
+   or `$HOME/git/software-factory-ops` when unset, preserving private installs.
+3. `Path(sys.executable).parent / "factory"`, the public console script installed
+   beside the running interpreter, not an arbitrary executable from `PATH`.
+
+Explicit `--launcher` remains available. Release identity `discover()` is
+unchanged and still requires the ops release layout.
+
+Preflight defaults to the packaged
+`factory_orchestration.adapters.loopback_provider` implementation, not Hermes's
+source-tree tests. It exposes `FakeLLMServer`, `Text`, and `ToolCall`, listens
+only on `127.0.0.1` with an ephemeral port, and serves OpenAI chat completions
+(JSON and SSE). Main requests with tools consume scripted text/tool-call turns;
+auxiliary requests without tools receive default text without consuming probes.
+Both are recorded for the attestation. Setting `FACTORY_HERMES_REPO` explicitly
+loads `tests/fakes/fake_llm_provider.py` from that checkout for compatibility;
+an invalid override still fails closed as `capability_unenforced`. There is no
+home-relative Hermes checkout default. Packaged Hermes needs no git checkout
+for this provider, but real Hermes tool-stack and Docker boundary checks are
+still required; no attestation checks, digest bindings or refusal reasons are
+relaxed. Offline loopback tests are transport tests, not live sandbox proof.
 
 The spec must resolve inside the repository or candidate workspace and be a
 regular tracked file at the immutable base commit. Its base blob's SHA-256 must

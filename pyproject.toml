@@ -29,6 +29,7 @@ dev = [
 ]
 
 [project.scripts]
+factory = "factory.cli:main"
 factory-run = "factory.runner:main"
 factory-audit = "factory.audit:main"
 factory-coverage = "factory.coverage:main"

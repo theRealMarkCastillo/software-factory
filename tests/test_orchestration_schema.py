@@ -129,8 +129,12 @@ def test_approval_binds_candidate_base_spec_and_evidence():
 def test_engine_does_not_depend_on_langgraph():
     sources = list((ROOT / "factory").glob("*.py"))
     assert sources
+    # The multiplexer names the optional dependency for a lazy install hint;
+    # only the orchestration branch may load it (also checked in isolation).
     offenders = [
-        path.name for path in sources if "langgraph" in path.read_text().lower()
+        path.name
+        for path in sources
+        if path.name != "cli.py" and "langgraph" in path.read_text().lower()
     ]
     assert offenders == []
     pyproject = (ROOT / "pyproject.toml").read_text()
@@ -145,7 +149,14 @@ def test_engine_does_not_depend_on_langgraph():
         "            raise ImportError('blocked by test')\n"
         "        return None\n"
         "sys.meta_path.insert(0, Block())\n"
-        "import factory.verify, factory.evidence, factory.runner\n"
+        "import factory.cli, factory.verify, factory.evidence, factory.runner\n"
+        "import contextlib, io\n"
+        "with contextlib.redirect_stdout(io.StringIO()):\n"
+        "    try:\n"
+        "        factory.cli.main(['verify', '--help'])\n"
+        "    except SystemExit as exc:\n"
+        "        assert exc.code == 0\n"
+        "assert not any(n.startswith('factory_orchestration') for n in sys.modules)\n"
         "print('ok')\n"
     )
     completed = subprocess.run(

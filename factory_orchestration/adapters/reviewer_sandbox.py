@@ -25,6 +25,7 @@ residual list recorded in every receipt.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -61,12 +62,6 @@ REJECTION_PROBES: dict[str, dict] = {
 
 #: ``python:3.12-slim`` as present on this host; the tag alone is not a pin.
 DEFAULT_IMAGE = os.environ.get("FACTORY_REVIEWER_IMAGE", "")
-
-#: The Hermes checkout that ships the loopback fake provider used by the
-#: executed preflight. Absent -> the attestation fails closed.
-HERMES_REPO = Path(
-    os.environ.get("FACTORY_HERMES_REPO", str(Path.home() / ".hermes" / "hermes-agent"))
-)
 
 RESIDUALS = (
     "Reading is exfiltration: anything mounted under /evidence can reach the "
@@ -316,20 +311,42 @@ def _run(
 
 
 def _load_fake_provider():
-    """Import the loopback provider from the installed Hermes checkout."""
+    """Use the packaged stub unless an operator explicitly selects a checkout."""
 
-    repo = str(os.environ.get("FACTORY_HERMES_REPO") or HERMES_REPO)
-    if not (Path(repo) / "tests" / "fakes" / "fake_llm_provider.py").is_file():
+    repo = os.environ.get("FACTORY_HERMES_REPO")
+    if repo is None:
+        from .loopback_provider import FakeLLMServer, Text, ToolCall
+
+        return FakeLLMServer, Text, ToolCall
+    path = Path(repo) / "tests" / "fakes" / "fake_llm_provider.py"
+    if not repo or not path.is_file():
         raise OrchestrationError(
             "capability_unenforced",
             f"loopback fake provider not found under {repo}; the executed preflight "
             "cannot run, so the sandbox is not attested",
         )
-    if repo not in sys.path:
-        sys.path.insert(0, repo)
-    from tests.fakes.fake_llm_provider import FakeLLMServer, Text, ToolCall  # noqa: PLC0415
-
-    return FakeLLMServer, Text, ToolCall
+    # Load the exact selected file, not an unrelated cached `tests` package.
+    name = (
+        "_factory_hermes_fake_"
+        + hashlib.sha256(str(path.resolve()).encode()).hexdigest()
+    )
+    if name not in sys.modules:
+        # The selected checkout's fake imports its own packages; they resolve
+        # from the checkout root, exactly as when the checkout runs its tests.
+        root = str(Path(repo).resolve())
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    module = sys.modules[name]
+    return module.FakeLLMServer, module.Text, module.ToolCall
 
 
 def _stream_events(path: Path) -> list[dict]:

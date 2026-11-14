@@ -299,6 +299,9 @@ class FactoryRunState(TypedDict, total=False):
     reviewer_request_id: str
     reviewer_result: dict
     repair_count: int
+    repair_context: dict
+    previous_failed_tree: str
+    previous_failure_signature: str
     max_repairs: int
     deadline: str
     cost_budget: str
@@ -418,6 +421,7 @@ class GateOutcome:
     detail: str = ""
     evidence_reference: str = ""
     evidence_digest: str = ""
+    log_reference: str = ""
 
     def __post_init__(self) -> None:
         _require(

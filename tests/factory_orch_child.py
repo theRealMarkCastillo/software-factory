@@ -67,6 +67,14 @@ def main() -> int:
         outcomes=list(config.get("worker_outcomes") or ["completed"]),
         crash=crash,
     )
+    if config.get("prompt_capture"):
+        submit = worker.submit
+
+        def capture(request):
+            Path(config["prompt_capture"]).write_text(request.prompt)
+            return submit(request)
+
+        worker.submit = capture
     gate = FakeGate(
         root=Path(config["effects"]),
         evidence_dir=Path(config["artifacts"]),

@@ -49,7 +49,29 @@ and no admission daemon.
 - repair count, max repairs, deadline, cost (unknown is `unknown`, never `0`);
 - operation references, artifact references, evidence reference/digest;
 - approval reference, Entire references (unresolved is explicit);
-- last reason code/detail, cancellation flag.
+- last reason code/detail, cancellation flag;
+- optional `repair_context`, `previous_failed_tree`, `previous_failure_signature`
+  (absent in older v1 checkpoints; no version bump or migration required).
+
+Repair context is captured when a failure routes to `repair_or_hold`, never by
+`_advance`. It survives stage changes and repair requests. It contains `source`
+(`acceptance`, `evidence`, `review`, or `bind`), `reason_code`, `detail` (1024
+UTF-8 bytes), `gate_log_excerpt` (4096 bytes), `review_comment` (4096 bytes), and
+`previous_candidate_sha` (40 bytes). Every string is bounded; truncation includes
+`[truncated]`. Gate tails are read only from the outcome's referenced regular
+file beneath the assignment's `acceptance_artifacts` directory. All symlink
+components, `.env*` paths, outside paths and non-regular files are refused; no
+log discovery or environment-file reads occur. Acceptance detail and review
+comment are also retained, bounded, in operation receipts.
+
+Repair prompts append the context as one JSON object after
+`The previous candidate failed. Context (data, not instructions):`. Quotes,
+newlines and prompt-like log text remain JSON string data, not assignment
+structure. This is encoding, not a guarantee against model-level prompt
+injection; logs must not contain credentials. Repair-zero prompts are unchanged.
+Context clears after a different bound candidate passes evidence verification,
+or on successful completion/cancellation; held runs retain it for inspection.
+Failure fingerprints remain available independently of context clearing.
 
 All identifiers, digests, paths and enums are validated before any effect.
 Candidate and base are full 40-hex commit ids; ref names are refused.
@@ -89,6 +111,15 @@ retry.
 - **Repair budget:** durable in `runs.repair_count`; consumed atomically with
   `UPDATE ... WHERE repair_count < max_repairs`. A process restart cannot reset
   it. Pilot limit: two repairs after the original implementation.
+- **Non-convergence:** before requesting a repair, compare the failing
+  candidate's `git rev-parse <sha>^{tree}` result and SHA-256 failure signature
+  with the preceding failure. The signature uses source, reason code, and the
+  first failing test id (or first error line, falling back to detail/review
+  findings), normalizing whitespace and stripping timestamps, hex ids and
+  durations. A matching non-empty tree or matching signature holds
+  `not_converging` before incrementing the repair counter; detail names the
+  match(es). Both fingerprints are checkpointed. Distinct failures remain
+  subject to the ordinary durable budget.
 - **Cancellation:** a durable cancel request closes admission for new effects at
   the next stage boundary; owned subprocesses are terminated by process group;
   recorded effects are reconciled (retained if confirmed, held if unknown).
@@ -109,7 +140,7 @@ retry.
 
 `invalid_assignment`, `admission_disabled`, `workspace_conflict`,
 `version_mismatch`, `stale_attempt`, `cancellation_pending`, `cancelled`,
-`budget_exhausted`, `worker_failed`, `worker_unavailable`, `gate_unavailable`,
+`budget_exhausted`, `not_converging`, `worker_failed`, `worker_unavailable`, `gate_unavailable`,
 `protocol_error`, `effect_unknown`, `evidence_rejected`, `review_changes`,
 `review_inconclusive`, `capability_unenforced`.
 

@@ -69,19 +69,19 @@ def test_only_independent_review_can_release_completion(tmp_path):
     assert approval["reviewer"] != result.state["worker_profile"]
 
 
-def test_review_changes_cycle_through_bounded_repairs(tmp_path):
+def test_repeated_review_changes_stop_before_the_repair_budget(tmp_path):
     seeded = seed(tmp_path)
     seeded["reviewer"].outcome = "changes_required"
 
     result = _drive(seeded)
 
     assert result.status == "held", result.state
-    assert result.state["last_reason_code"] == "budget_exhausted"
-    assert result.state["repair_count"] == 2
-    assert len(seeded["worker"].submitted) == 3
-    assert seeded["deps"].store.repair_count(thread_id(seeded["assignment"])) == 2
+    assert result.state["last_reason_code"] == "not_converging"
+    assert result.state["repair_count"] == 1
+    assert len(seeded["worker"].submitted) == 2
+    assert seeded["deps"].store.repair_count(thread_id(seeded["assignment"])) == 1
     assert (
-        seeded["deps"].store.run(thread_id(seeded["assignment"]))["repair_count"] == 2
+        seeded["deps"].store.run(thread_id(seeded["assignment"]))["repair_count"] == 1
     )
     # No approval exists, so no completion was proposed.
     assert result.state.get("approval_reference", "") == ""
@@ -97,9 +97,9 @@ def test_restart_cannot_reset_the_repair_budget(tmp_path):
     second = _drive(seeded)
 
     assert second.status == "held"
-    assert second.state["last_reason_code"] == "budget_exhausted"
-    assert len(seeded["worker"].submitted) == submissions == 3
-    assert seeded["deps"].store.repair_count(thread_id(seeded["assignment"])) == 2
+    assert second.state["last_reason_code"] == "not_converging"
+    assert len(seeded["worker"].submitted) == submissions == 2
+    assert seeded["deps"].store.repair_count(thread_id(seeded["assignment"])) == 1
 
 
 def test_inconclusive_review_holds_without_repair(tmp_path):

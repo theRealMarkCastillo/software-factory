@@ -115,8 +115,11 @@ The run holds with `review_credentials_unavailable` and a not-run review record,
 not a verdict; no repair is consumed and completion is not authorized. Select
 an API-key provider using `--review-provider`, `--review-model` and
 `--review-base-url`, and configure its allowlisted key in the selected
-`--review-provider-profile` or the process environment. Keys are never included
-in diagnostics or persisted in the disposable review home.
+`--review-provider-profile` or the process environment. The selected key, and
+only that key, is written to the disposable review home's `.env` (mode 0600):
+Hermes resolves provider credentials from the profile home, not from the
+launching process's environment. Keys never appear in receipts, attestations,
+request records, transcripts, evidence or diagnostics.
 
 Independent review is refusal-by-default. To use the enforced R2-A reviewer,
 pass `--reviewer-sandbox` (plus `--reviewer-root`, and either

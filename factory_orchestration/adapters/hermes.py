@@ -998,7 +998,7 @@ class HermesReviewer:
                 provider=self.review_provider or "custom",
                 api_mode=self.review_api_mode,
                 api_key=None,
-                env_values={},
+                env_values=review_credentials,
             )
             self.attestor.verify_terminal(spec)
         prompt = _review_prompt(candidate_sha, base_sha, spec_digest, evidence_digest)

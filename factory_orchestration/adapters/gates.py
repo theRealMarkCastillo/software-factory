@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..errors import OrchestrationError
 from ..operations import EffectProbe
+from ..redaction import redact_diagnostic
 from ..state import Attempt, GateOutcome, VerifyOutcome
 from .base import CancelReport
 
@@ -97,7 +98,7 @@ class InstalledLauncherGate:
             return VerifyOutcome(
                 certified=False,
                 reason="usage_error",
-                detail=completed.stderr.strip()[:400],
+                detail=redact_diagnostic(completed.stderr.strip())[:400],
             )
         payload: dict = {}
         try:
@@ -114,7 +115,9 @@ class InstalledLauncherGate:
         return VerifyOutcome(
             certified=False,
             reason=reason or f"launcher_exit_{completed.returncode}",
-            detail=str(payload.get("detail") or completed.stderr.strip())[:400],
+            detail=redact_diagnostic(
+                str(payload.get("detail") or completed.stderr.strip())
+            )[:400],
         )
 
     def run_acceptance(

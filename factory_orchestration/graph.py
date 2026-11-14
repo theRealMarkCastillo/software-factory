@@ -32,6 +32,7 @@ from typing import Any, Callable
 
 from .errors import OrchestrationError
 from .operations import digest_parts, resolve, stable_key
+from .redaction import redact_diagnostic
 from .state import (
     Attempt,
     FactoryRunState,
@@ -252,7 +253,7 @@ _CONTEXT_LIMITS = {
 def _bounded(value: str, maximum: int, *, tail: bool = False) -> str:
     """Limit UTF-8 bytes, including an explicit truncation marker."""
 
-    raw = value.encode("utf-8", errors="replace")
+    raw = redact_diagnostic(value).encode("utf-8", errors="replace")
     if len(raw) <= maximum:
         return raw.decode("utf-8")
     size = maximum - len(_TRUNCATED)
@@ -305,12 +306,26 @@ def _gate_log_tail(root: str, reference: str) -> str:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             return ""
-        os.lseek(fd, max(0, info.st_size - 4097), os.SEEK_SET)
-        raw = os.read(fd, 4097)
-        text = raw.decode("utf-8", errors="replace")
-        if info.st_size > len(raw):
-            text = _TRUNCATED + text
-        return _bounded(text, 4096, tail=True)
+        # Bound I/O regardless of log size. Discard the first potentially
+        # partial line before redaction so a cut credential is not forwarded.
+        maximum = 64 * 1024
+        start = max(0, info.st_size - maximum)
+        os.lseek(fd, start, os.SEEK_SET)
+        raw = os.read(fd, maximum)
+        truncated = start > 0
+        if truncated:
+            raw = raw.partition(b"\n")[2]
+        text = redact_diagnostic(raw.decode("utf-8", errors="replace"), cut_window=True)
+        raw = text.encode("utf-8", errors="replace")
+        if len(raw) > 4096 or (truncated and len(raw) > 4096 - len(_TRUNCATED)):
+            truncated = True
+            raw = raw[-(4096 - len(_TRUNCATED)) :]
+            # Prefer a complete first line, but retain a useful suffix when
+            # the window contains only one oversized line.
+            newline = raw.find(b"\n")
+            if 0 <= newline < len(raw) - 1:
+                raw = raw[newline + 1 :]
+        return (_TRUNCATED if truncated else "") + raw.decode("utf-8", errors="ignore")
     except (OSError, ValueError, RuntimeError):
         return ""
     finally:
@@ -368,29 +383,52 @@ def _failure_context(
 def _failure_signature(context: dict) -> str:
     """Stable first test/error identity, not a digest of volatile whole logs."""
 
-    excerpt = context.get("gate_log_excerpt") or ""
-    failed = re.search(r"\b(?:FAILED|FAIL|ERROR)\s+([^\s]+::[^\s]+)", excerpt)
-    if failed:
-        identity = failed.group(1)
+    excerpt = redact_diagnostic(context.get("gate_log_excerpt") or "").removeprefix(
+        _TRUNCATED
+    )
+    summary_lines = [
+        re.sub(
+            r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?\s+",
+            "",
+            re.sub(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\s+\|\s?", "", line, count=1),
+            count=1,
+        )
+        for line in excerpt.splitlines()
+    ]
+    failed = next(
+        (
+            line.split(" ", 1)[1]
+            for line in summary_lines
+            if line.startswith(("FAILED ", "ERROR "))
+        ),
+        None,
+    )
+    if failed is not None:
+        # Parameter IDs are semantic, including spaces, hex and timestamps.
+        identity = failed.split(" - ", 1)[0]
     else:
         lines = excerpt.splitlines()
         identity = next(
             (
                 line
                 for line in lines
-                if re.search(r"\b(?:ERROR|FAIL(?:ED)?|\w*Error)\b", line)
+                if line.strip()
+                and re.search(r"\b(?:ERROR|FAIL(?:ED)?|\w*Error)\b", line)
             ),
             context.get("review_comment") or context.get("detail") or "",
         )
-    identity = re.sub(
-        r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?",
-        "",
-        identity,
-    )
-    identity = re.sub(r"\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b", "", identity)
-    identity = re.sub(r"\b(?:0x[0-9a-fA-F]+|[0-9a-fA-F]{7,64})\b", "", identity)
-    identity = re.sub(r"\b\d+(?:\.\d+)?\s*(?:ms|s|seconds?)\b", "", identity)
-    identity = " ".join(identity.split())
+        identity = redact_diagnostic(identity)
+        identity = re.sub(
+            r"\b\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?",
+            "",
+            identity,
+        )
+        identity = re.sub(r"\b\d{2}:\d{2}:\d{2}(?:\.\d+)?\b", "", identity)
+        identity = re.sub(r"\b(?:0x[0-9a-fA-F]+|[0-9a-fA-F]{12,})\b", "", identity)
+        identity = re.sub(
+            r"\b(?:in\s+)?\d+(?:\.\d+)?\s*(?:ms|s|seconds?)\b", "", identity
+        )
+        identity = " ".join(identity.split())
     payload = " | ".join(
         (context.get("source", ""), context.get("reason_code", ""), identity)
     )
@@ -510,6 +548,7 @@ def build_graph(deps: Deps, checkpointer=None):
                     guard(state)
                 updates = fn(state) or {}
             except OrchestrationError as exc:
+                exc.detail = _bounded(exc.detail, 1024)
                 deps.store.event(
                     thread,
                     "stage_error",
@@ -1077,7 +1116,7 @@ def build_graph(deps: Deps, checkpointer=None):
                 spec_digest=review.spec_digest,
                 evidence_digest=review.evidence_digest,
                 graph_version=review.graph_version,
-                comment=review.comment,
+                comment=_bounded(review.comment, 4096),
             )
             return _advance(
                 state,

@@ -74,9 +74,15 @@ def fail_gate(s, detail, log=None):
         )
 
 
-def receipt(s, kind):
+def receipt(s, kind, repair_index=0):
     records = s["deps"].store.operations(thread_id(s["assignment"]))
-    return json.loads(next(r for r in records if r["kind"] == kind)["receipt_json"])
+    return json.loads(
+        next(
+            r
+            for r in records
+            if r["kind"] == kind and r["repair_index"] == repair_index
+        )["receipt_json"]
+    )
 
 
 def test_repair_zero_is_byte_identical():
@@ -238,7 +244,7 @@ def test_repeated_failure_holds_without_spending_second_repair(tmp_path, match):
         calls.append(kw)
         test = "same" if match == "signature" else str(index)
         log.write_text(
-            f"2026-11-14T10:00:0{index}Z abcdef{index} FAILED tests/test_app.py::test_{test} - failed in {index + 1}.23s\n"
+            f"2026-11-14T10:00:0{index}Z abcdef123456{index} FAILED tests/test_app.py::test_{test} - failed in {index + 1}.23s\n"
         )
         return GateOutcome("fail", reason="test_failed", detail=str(log))
 
@@ -380,8 +386,8 @@ def test_restart_between_failure_and_request_repair(tmp_path):
     "first,second,equal",
     [
         (
-            "2026-11-14T10:00:01Z ERROR: record abcdef123 took 1.2s",
-            "2026-11-15T11:01:02Z ERROR:  record 123456abc took 2.3s",
+            "2026-11-14T10:00:01Z ERROR: record abcdef123456 took 1.2s",
+            "2026-11-15T11:01:02Z ERROR:  record 123456abcdef took 2.3s",
             True,
         ),
         ("ERROR: create rejected", "ERROR: delete rejected", False),

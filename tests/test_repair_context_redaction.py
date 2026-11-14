@@ -146,9 +146,8 @@ def test_env_name_contract(monkeypatch, name):
 
 
 def test_provider_name_sets_are_included(monkeypatch):
-    from factory_orchestration.redaction import redact_diagnostic
-
     from factory_orchestration.adapters import hermes
+    from factory_orchestration.redaction import redact_diagnostic
 
     monkeypatch.setattr(hermes, "PROVIDER_ENV", frozenset({"FIXTURE_PROVIDER"}))
     monkeypatch.setitem(hermes.REVIEW_PROVIDER_KEYS, "fixture", ("FIXTURE_REVIEW",))

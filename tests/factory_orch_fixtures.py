@@ -207,7 +207,7 @@ def seed(root: Path) -> dict:
     repo, base, candidate = build_repo(root)
     workspace = add_worktree(repo, candidate, root / "workspace")
     artifacts = make_evidence(root / "artifacts", repo, base, candidate)
-    spec = repo / "card-spec.md"
+    spec = workspace / "card-spec.md"
     digest = "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest()
     state_dir = root / "state"
     enable_admission(state_dir)

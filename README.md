@@ -67,6 +67,35 @@ The default suite skips two explicitly marked live-host checks. See the
 contributing guide before enabling them. The package installs the engine;
 skills are installed separately from this checkout.
 
+## Command entry points
+
+The package installs `factory` as a standalone multiplexer:
+
+```sh
+factory {run|verify|promote|audit|coverage|datamodel|learning|orchestrate} [args...]
+factory verify --help
+```
+
+Arguments and exit status pass through unchanged to each tool. All eight
+`factory-*` commands remain available. Only `factory orchestrate` requires the
+optional workflow dependencies (`pip install 'hermes-software-factory[orchestration]'`);
+core engine subcommands do not import orchestration.
+
+Orchestration's default launcher is resolved at use time: `FACTORY_LAUNCHER`
+(an absolute executable file, otherwise an error), then `<ops root>/bin/factory`
+if present, then `factory` beside the running Python interpreter. The ops root is
+`FACTORY_OPS_ROOT` or `$HOME/git/software-factory-ops`. Existing private installs
+retain their pinned launcher; public installs need no ops repository for the
+verification gate. Explicit `--launcher` remains available; installed release
+identity discovery still requires the private release layout.
+
+Reviewer preflight uses a packaged, loopback-only scripted chat-completions stub;
+it no longer needs a Hermes source checkout. Setting `FACTORY_HERMES_REPO`
+explicitly selects that checkout's fake provider for compatibility. See
+[reviewer sandbox prerequisites](docs/langgraph-hybrid/reviewer-sandbox.md).
+This removes a packaging dependency, not the real Hermes/Docker attestation
+requirements or the reviewer refusal default.
+
 ## Engine and Hermes responsibilities
 
 | Component | Responsibility | Requires Hermes |

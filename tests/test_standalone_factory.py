@@ -47,7 +47,12 @@ def test_dispatch_preserves_arguments_and_exit(monkeypatch, command, module):
 
     monkeypatch.setattr(cli.importlib, "import_module", load)
     assert cli.main([command, "--help", "--unknown", "two words"]) == 17
-    assert calls == [module, ["--help", "--unknown", "two words"]]
+    imports = (
+        ["langgraph.checkpoint.sqlite", module]
+        if command == "orchestrate"
+        else [module]
+    )
+    assert calls == [*imports, ["--help", "--unknown", "two words"]]
 
 
 @pytest.mark.parametrize("argv", [[], ["unknown"], ["--bad"]])
@@ -147,7 +152,7 @@ def test_real_installed_verify(public_environment, tmp_path):
     )
     assert outcome.certified, outcome
     # Real verifier must still refuse tampering, not just route a help command.
-    (artifacts / "pytest.txt").write_text("tampered")
+    (artifacts / "up.stdout.log").write_text("tampered")
     assert not gate.verify(
         artifacts=str(artifacts),
         repository=str(repo),
@@ -202,7 +207,15 @@ def test_loopback_script_and_recording(monkeypatch, stream):
     script = [ToolCall("read_file", {"path": "/evidence/readme"}), Text("done")]
     with Server(script, default_text="finished") as server:
         assert server.base_url.startswith("http://127.0.0.1:")
-        body = {"model": "fake-model", "messages": [], "stream": stream}
+        body = {
+            "model": "fake-model",
+            "messages": [],
+            "stream": stream,
+            "tools": [{"type": "function", "function": {"name": "read_file"}}],
+        }
+        with _post(server, {"model": "fake-model", "messages": []}) as response:
+            assert json.load(response)["choices"][0]["message"]["content"] == "finished"
+        assert server.requests.pop()["kind"] == "auxiliary"
         with _post(server, body) as response:
             raw = response.read().decode()
             if stream:

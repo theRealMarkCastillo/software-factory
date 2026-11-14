@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -88,7 +89,24 @@ def default_ops_root() -> Path:
 
 
 def default_launcher() -> Path:
-    return default_ops_root() / "bin" / "factory"
+    """Prefer an explicit launcher, then private ops, then this Python's script."""
+
+    configured = os.environ.get("FACTORY_LAUNCHER")
+    if configured is not None:
+        launcher = Path(configured)
+        if (
+            not launcher.is_absolute()
+            or not launcher.is_file()
+            or not os.access(launcher, os.X_OK)
+        ):
+            raise ValueError(
+                "FACTORY_LAUNCHER must be an absolute path to an executable file"
+            )
+        return launcher
+    private = default_ops_root() / "bin" / "factory"
+    if private.is_file():
+        return private
+    return Path(sys.executable).parent / "factory"
 
 
 def discover(ops_root: str | Path | None = None) -> InstalledRelease:

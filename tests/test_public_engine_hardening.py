@@ -145,15 +145,18 @@ def test_leak_scan_ignores_binary_files(tmp_path, monkeypatch):
 def test_ops_defaults_are_resolved_after_import(tmp_path, monkeypatch, use_env):
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     monkeypatch.delenv("FACTORY_OPS_ROOT", raising=False)
+    monkeypatch.delenv("FACTORY_LAUNCHER", raising=False)
     expected = tmp_path / "git" / "software-factory-ops"
     if use_env:
         expected = tmp_path / "custom-ops"
         monkeypatch.setenv("FACTORY_OPS_ROOT", str(expected))
+    # Private launcher precedence applies only when the launcher file exists.
+    (expected / "bin").mkdir(parents=True)
+    (expected / "bin" / "factory").write_text("private fixture launcher\n")
     args = build_parser().parse_args(
         ["--state-dir", str(tmp_path), "inspect", "t_deadbeef"]
     )
     assert Path(args.launcher) == expected / "bin" / "factory"
-    expected.mkdir(parents=True)
     with pytest.raises(FileNotFoundError) as exc:
         installed.discover()
     assert str(expected) in str(exc.value)

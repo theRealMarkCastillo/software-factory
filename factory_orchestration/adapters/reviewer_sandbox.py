@@ -331,6 +331,11 @@ def _load_fake_provider():
         + hashlib.sha256(str(path.resolve()).encode()).hexdigest()
     )
     if name not in sys.modules:
+        # The selected checkout's fake imports its own packages; they resolve
+        # from the checkout root, exactly as when the checkout runs its tests.
+        root = str(Path(repo).resolve())
+        if root not in sys.path:
+            sys.path.insert(0, root)
         spec = importlib.util.spec_from_file_location(name, path)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)

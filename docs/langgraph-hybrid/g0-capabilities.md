@@ -9,7 +9,7 @@ Provenance:
 
 - Hermes source: `~/.hermes/hermes-agent` at
   `a9ff9799e273f525b82718cdc69fdec71b1dca5a` (`Hermes Agent v0.23.0+689.ga9ff979`).
-- Factory engine: `f0d1545706fce719fc2c643ef47d2837b93e7411` (start of this work).
+- Factory engine: `17c0343edbcab75a9591ea20a877ec11310b25fc` (start of this work).
 - Ops launcher: `~/software-factory-ops/bin/factory` at
   `5d9b65d96fcf7de51b66c798392b4bea17ca7fbf`.
 - Captured command output: `docs/langgraph-hybrid/evidence/g0-capture.json`.

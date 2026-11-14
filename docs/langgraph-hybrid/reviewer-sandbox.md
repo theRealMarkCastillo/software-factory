@@ -52,7 +52,7 @@ review home's files, and never in the tool container.
 Attestation on the frozen candidate (clean `git archive` of the implementation
 revision) and the selected evidence tree (`docs/langgraph-hybrid/evidence/`),
 receipt committed at `docs/langgraph-hybrid/evidence/reviewer-sandbox/attestation.json`
-with explicit provenance (`revision: 651b2ea…`, candidate/evidence paths and
+with explicit provenance (`revision: 076ff96…`, candidate/evidence paths and
 digests):
 
 ```

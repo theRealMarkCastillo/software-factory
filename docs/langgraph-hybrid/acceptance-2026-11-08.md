@@ -2,19 +2,19 @@
 
 Date: 2026-11-08
 Implementation revision under review:
-**`651b2ea890d7d818a1174beb5c1096025434df41`**
+**`076ff961243bde84b900210502fb38d82452374d`**
 Evidence commit: the commit that adds this file. Its parent is the
 implementation revision above; this record and the refreshed evidence are the
 only changes it adds.
 Branch: `feat/langgraph-hybrid-orchestration` (worktree
 `~/software-factory-langgraph`)
-Base: `f0d1545706fce719fc2c643ef47d2837b93e7411` (engine `main`, clean at start)
+Base: `17c0343edbcab75a9591ea20a877ec11310b25fc` (engine `main`, clean at start)
 
 This record reports commands actually run and their observed output. Fixture
 coverage is labelled as such; it is not presented as end-to-end production
 acceptance.
 
-## Delta in this revision (since `2971e864`)
+## Delta in this revision (since `52fc8522`)
 
 - `factory/policy.py` gains `container_image_digest`: the reviewer image pin is
   resolved through the sanctioned Docker path with a validated reference
@@ -29,7 +29,7 @@ acceptance.
   the guard fails at `reviewer_sandbox.py:228`; the policy tests fail because
   the helper does not exist.
 - The sandbox was re-attested from a clean `git archive` of this revision
-  (`provenance.revision: 651b2ea`). The pinned image is unchanged
+  (`provenance.revision: 076ff96`). The pinned image is unchanged
   (`python@sha256:02108f5d…`), so the earlier graph-run and live-review
   receipts remain bound to the same image and stay valid.
 - No other executable change: graph, adapters, admission, CLI, gates and
@@ -100,7 +100,7 @@ Host-side acceptance (real Docker, disposable scratch only):
 | T7 repair budget | PASS | original + two repairs exhausts the budget; restart cannot reset it (`tests/test_orchestration_flow.py`) |
 | T8 installed identity | PASS | pinned launcher/ready/deployment/policy identity recomputed; installed verifier negative; full installed `factory run` + `verify` on a disposable repo; graph whose acceptance/verification used the installed launcher (`tests/test_orchestration_installed.py`, `evidence/installed-acceptance.json`, `evidence/hermes-graph-run/`) |
 | T9 opt-in / rollback | PASS | disabled admission refuses before effect; drain allowed; rollback keeps checkpoints readable and legacy cards operable (`tests/test_orchestration_installed.py`) |
-| T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox`. The live real-provider review receipt was generated at `2971e86` and remains bound to the unchanged image pin (`python@sha256:02108f5d…`); the sandbox was re-attested at `651b2ea` and the `651b2ea` graph run exercises the review path (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
+| T10 read-only capability | PASS (tool effects, enforced) | executed attestation at this revision: effective config, preflight through the real tool stack, container inspection; `:ro` mounts, pinned image digest resolved through `policy.container_image_digest` (no raw Docker call anywhere in `factory_orchestration/`), non-root 10001, `--read-only` rootfs, `NetworkMode=none`, `CapEff=0`, no socket/CLI, egress unreachable; write/patch → EROFS; host canaries unreadable; refusal remains the default without `--reviewer-sandbox`. The live real-provider review receipt was generated at `52fc852` and remains bound to the unchanged image pin (`python@sha256:02108f5d…`); the sandbox was re-attested at `076ff96` and the `076ff96` graph run exercises the review path (`evidence/reviewer-sandbox/attestation.json`, `tests/test_orchestration_reviewer_sandbox.py`, `tests/test_policy.py`) |
 | T11 mismatch holds | PASS | moved base, changed spec, changed graph/schema, changed engine/policy identity and unrecognized release produce holds; no silent migration (`tests/test_orchestration_recovery.py`) |
 | T12 metrics | PARTIAL | observed values only: fixture pilot 1 s / 10 transitions / 0 interventions / 0 repairs; real-worker graph 126 s / 11 transitions / 0 interventions / 0 repairs; historical baseline unavailable and reported as a gap (`evidence/pilot-run.json`, `evidence/hermes-graph-run/run.json`) |
 

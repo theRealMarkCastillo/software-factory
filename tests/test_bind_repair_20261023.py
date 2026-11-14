@@ -1,6 +1,6 @@
 """Fail-first regressions for the narrow relative-bind repair (2026-10-23 QC).
 
-Frozen failing subject: engine ``0c0fdb9``. At that SHA the relative-source
+Frozen failing subject: engine ``584ae28``. At that SHA the relative-source
 branch of ``check_bind_source`` returned before every ``SENSITIVE_HOST_ROOTS``
 check, so repo-root mounts, arbitrary home roots, system-root relative mounts,
 and ``.env.*`` credential files were all authorized.

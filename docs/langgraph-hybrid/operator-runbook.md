@@ -296,7 +296,7 @@ sanctioned way to drive a real-card pilot:
 ```
 
 `<release>` is the staged release root (for example
-`.../.runtime/staging/09dbee2`); `<release>/engine` does not exist, the engine
+`.../.runtime/staging/d2bfe22`); `<release>/engine` does not exist, the engine
 tree is under `<release>/.runtime/current/engine`. The harness refuses an
 existing run root, creates the disposable repository/workspace and acceptance wrapper under it, drives `run`/`resume` (including a duplicate-run
 refusal and a premature-resume refusal while the worker is live), waits only on

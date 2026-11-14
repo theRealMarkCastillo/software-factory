@@ -1,7 +1,7 @@
 """Replay safety: timeout reaping, suite tampering, gate refusal, real replay.
 
 The historical training replay at the end runs the *actual* commits cited by the
-plan (``a07521c`` and ``f90af08``) through the shipped CLI against the committed
+plan (``54d347e`` and ``f61afd4``) through the shipped CLI against the committed
 evaluator suite. Its generated checkouts are disposable test fixtures and are
 removed from the shared repository's worktree registry when the test ends; the
 retained-tree rule applies to the recorded demonstration, not to test fixtures.
@@ -28,8 +28,8 @@ from test_learning_replay_exec import (
 from factory import learning, promote, replay, verify
 
 REPO = Path(__file__).resolve().parents[1]
-HISTORICAL_BASELINE = "a07521c7a8761a9edada4d9faaa9c22efb4ec61a"
-HISTORICAL_CANDIDATE = "f90af08906583a5ebe13a7acf0bc65aa18d53a99"
+HISTORICAL_BASELINE = "54d347e4c7e9c9e155cfcda85ece2f898544f0b9"
+HISTORICAL_CANDIDATE = "f61afd4f819bc58a25aedf495c560a81d98890f8"
 TRAINING_SUITE = REPO / "tests" / "fixtures" / "replay-suite"
 
 
@@ -296,12 +296,12 @@ def test_verify_and_promote_reject_a_replay_report(work_base, capsys):
 
 
 # ---------------------------------------------------------------------------
-# the real historical training replay (a07521c -> f90af08)
+# the real historical training replay (54d347e -> f61afd4)
 # ---------------------------------------------------------------------------
 
 
 def test_ci_checkout_fetches_the_history_the_historical_replay_needs():
-    """A shallow checkout lacks ``a07521c``; CI must provision full history."""
+    """A shallow checkout lacks ``54d347e``; CI must provision full history."""
     workflow = (REPO / ".github" / "workflows" / "tests.yml").read_text()
     lines = workflow.splitlines()
     start = next(i for i, line in enumerate(lines) if "actions/checkout@" in line)

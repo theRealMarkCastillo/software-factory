@@ -17,7 +17,7 @@ from factory.learning import import_incident
 
 CARD = "t_f5aac873"
 BASE_SHA = "a" * 40
-REPAIRED_SHA = "f90af08906583a5ebe13a7acf0bc65aa18d53a99"
+REPAIRED_SHA = "f61afd4f819bc58a25aedf495c560a81d98890f8"
 
 
 def sha256_of(blob: bytes) -> str:

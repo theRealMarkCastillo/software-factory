@@ -38,7 +38,7 @@ Status: accepted by Arx with the binding corrections below; design card `t_9ab43
    No unrelated evidence refactor. Verifier/promoter must still reject replay output.
 
 Source base
-`f90af08906583a5ebe13a7acf0bc65aa18d53a99`; plan
+`f61afd4f819bc58a25aedf495c560a81d98890f8`; plan
 `arx-docs/specs/2026-10-23-factory-failure-regression-plan.md`. Adds no
 acceptance path, no second gate, no Docker execution.
 
@@ -48,9 +48,9 @@ QC finding F2 of `evidence-gate-20261023` (`qc-engine/extra-results.json`, case
 `duplicate_json_keys_last_wins`) showed `factory-verify` certifying a manifest
 containing `"mode": "diagnostic", "mode": "acceptance"`: `json.loads` keeps the
 last member, another reader may keep the first. The cited observable is a
-verifier defect, not a product defect. `f90af08` repairs it with a duplicate-key
-hook and a `RecursionError` guard (`factory/evidence.py:1177-1215`); `a07521c`
-still parses with bare `json.loads` (`a07521c:factory/evidence.py:1227`).
+verifier defect, not a product defect. `f61afd4` repairs it with a duplicate-key
+hook and a `RecursionError` guard (`factory/evidence.py:1177-1215`); `54d347e`
+still parses with bare `json.loads` (`54d347e:factory/evidence.py:1227`).
 
 The loop stays small: ingest a cited failure as data, emit a proposal that is
 explicitly not authorization, and execution-compare one evaluator-owned
@@ -218,9 +218,9 @@ one is idempotent and cites the incident id and target nodeid.
 **Stage B — replay** (`factory/replay.py` ~430 lines;
 `tests/test_learning_replay.py` ~420, `tests/test_learning_safety.py` ~120;
 `tests/fixtures/replay-suite/`; `docs/failure-regression.md`).
-B1 training case: baseline `a07521c` -> `assertion_failure` on
+B1 training case: baseline `54d347e` -> `assertion_failure` on
 `test_duplicate_json_keys.py::test_duplicate_json_keys_are_rejected`, candidate
-`f90af08` -> `pass`, control passes both, equal digest, verdict `reproduced`,
+`f61afd4` -> `pass`, control passes both, equal digest, verdict `reproduced`,
 report binds both SHAs, digest, commands, exit codes and log hashes.
 B2 a target failing identically on both sides -> `not_reproduced`; a suite whose
 import is missing -> `inconclusive harness_error`; never `reproduced`.

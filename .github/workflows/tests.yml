@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # The historical replay test checks out the cited baseline commit
-          # (a07521c) and repair commit; a shallow checkout lacks those objects
+          # (54d347e) and repair commit; a shallow checkout lacks those objects
           # and the replay refuses with `unknown_revision`. Full history keeps
           # the replay offline and skips/xfails unnecessary.
           fetch-depth: 0

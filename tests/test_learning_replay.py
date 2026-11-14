@@ -20,8 +20,8 @@ import pytest
 from factory import learning, replay
 
 REPO = Path(__file__).resolve().parents[1]
-BASELINE = "a07521c7a8761a9edada4d9faaa9c22efb4ec61a"
-CANDIDATE = "f90af08906583a5ebe13a7acf0bc65aa18d53a99"
+BASELINE = "54d347e4c7e9c9e155cfcda85ece2f898544f0b9"
+CANDIDATE = "f61afd4f819bc58a25aedf495c560a81d98890f8"
 
 
 # ---------------------------------------------------------------------------

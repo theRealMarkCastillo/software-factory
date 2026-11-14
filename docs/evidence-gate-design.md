@@ -45,7 +45,7 @@ Design card `t_371b42bb`; this document alone is not runtime acceptance.
 
 Implementation is staged as evidence producer/verifier first, then guarded
 promotion, then independent full QC; ops integration/deployment remain separate.
-Base: `3673987e9d4a31de93faed38cef717aa57fde040`, branch `feat/evidence-gate-20261023`.
+Base: `58d22ec44c28db41af57cd98ae11ee3e69114cb8`, branch `feat/evidence-gate-20261023`.
 
 This design is grounded in the current engine (`factory/evidence.py`,
 `factory/runner.py`, `factory/coverage.py`, `factory/audit.py`,

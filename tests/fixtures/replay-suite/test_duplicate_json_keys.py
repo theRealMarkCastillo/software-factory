@@ -4,7 +4,7 @@ This is the executable form of the cited ``evidence-gate-20261023`` F2
 observable: ``factory-verify`` parsed the manifest with ``json.loads``, which
 keeps the *last* duplicate member, so ``{"mode": "diagnostic", "mode":
 "acceptance"}`` certified as acceptance while another conforming reader could
-see ``diagnostic``. ``a07521c`` still does that; ``f90af08`` refuses the
+see ``diagnostic``. ``54d347e`` still does that; ``f61afd4`` refuses the
 ambiguous document.
 
 The assertions below are about the observable, not about a private helper: a

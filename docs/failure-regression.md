@@ -11,7 +11,7 @@ suite. It is not original TDD provenance, not a statement about root cause, and
 not evidence of model quality, speed or cost improvement.
 
 Design: [failure-regression-design.md](failure-regression-design.md). Base
-revision: `4c7b695` (branch `feat/failure-regression-20261023`).
+revision: `4046ab7` (branch `feat/failure-regression-20261023`).
 
 ## Commands
 

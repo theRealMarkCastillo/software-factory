@@ -248,7 +248,7 @@ def _decision_ingress(deps: Deps, state: dict, attempt: Attempt, payload):
     """
     from .decisions import invalid_decision
     from .graph import _pending_key, _receipt_payload, _worker_receipt
-    from .operations import _attempt_from, _WorkerResume
+    from .operations import _WorkerResume
 
     typed = payload.receipt if isinstance(payload, _WorkerResume) else None
     raw = payload.get("receipt") if isinstance(payload, dict) else None
@@ -295,9 +295,31 @@ def _decision_ingress(deps: Deps, state: dict, attempt: Attempt, payload):
         return {"kind": kind}
 
     try:
-        supplied_attempt = typed.attempt if typed else _attempt_from(raw["attempt"])
-    except (KeyError, TypeError, ValueError):
-        return refuse("worker_protocol_error")
+        identity = typed.attempt.as_dict() if typed else raw["attempt"]
+        # External decisions must supply the complete typed identity, not the
+        # legacy parser's int coercion or optional-field defaults. A nullable or
+        # differing diagnostic lock remains supported; it is not a new fence.
+        if not isinstance(identity, dict) or not {
+            "task_id",
+            "profile",
+            "run_id",
+            "claim_lock",
+        }.issubset(identity):
+            raise invalid_decision()
+        if identity["claim_lock"] is not None and not isinstance(
+            identity["claim_lock"], str
+        ):
+            raise invalid_decision()
+        supplied_attempt = Attempt(
+            task_id=identity["task_id"],
+            run_id=identity["run_id"],
+            profile=identity["profile"],
+            claim_lock=identity["claim_lock"],
+        )
+    except (OrchestrationError, AttributeError, KeyError, TypeError, ValueError):
+        # No receipt identity means no authority to replace even a refusal.
+        # Suppress parser context as well as raw values in the public error.
+        raise invalid_decision() from None
     if (
         supplied_attempt.task_id != attempt.task_id
         or supplied_attempt.profile != attempt.profile

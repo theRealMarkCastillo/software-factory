@@ -361,6 +361,7 @@ def test_malformed_resume_cannot_be_overridden_by_completed_poll(tmp_path):
     payload = {
         "receipt": {
             "operation_key": key,
+            "attempt": s["attempt"].as_dict(),
             "outcome": "needs_decision",
             "decision": {**decision(), "extra": "invalid"},
         }

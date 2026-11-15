@@ -366,7 +366,7 @@ def test_launcher_gate_argv(tmp_path, monkeypatch, paths):
         "--json",
     ]
     for path in paths:
-        expected += ["--frozen", path]
+        expected += [f"--frozen={path}"]
     assert seen == [expected]
 
 

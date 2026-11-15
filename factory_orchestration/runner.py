@@ -83,16 +83,12 @@ def _validate_spec_visibility(assignment: RunAssignment) -> None:
 
     try:
         spec = Path(assignment.spec_reference).resolve(strict=True)
-        roots = (
-            Path(assignment.repository).resolve(strict=True),
-            Path(assignment.workspace_path).resolve(),
-        )
-        relative = next(
-            (spec.relative_to(root) for root in roots if spec.is_relative_to(root)),
-            None,
-        )
-        if relative is None or not spec.is_file():
-            raise ValueError("spec must resolve inside repository or workspace_path")
+        workspace = Path(assignment.workspace_path).resolve()
+        if not spec.is_relative_to(workspace) or not spec.is_file():
+            raise ValueError(
+                "spec must resolve to a regular file inside workspace_path"
+            )
+        relative = spec.relative_to(workspace)
         argv = [
             "git",
             "-C",

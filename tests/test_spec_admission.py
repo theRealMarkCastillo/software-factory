@@ -180,8 +180,8 @@ def test_same_root_preserves_existing_isolation_refusal(tmp_path):
     assert_no_admission(seeded)
 
 
-@pytest.mark.parametrize("kind", (*INVALID, "same-root"))
-def test_actual_cli_refuses_without_board_or_execution(tmp_path, kind):
+@pytest.mark.parametrize("kind", (*INVALID, "same-root", *VALID))
+def test_actual_cli_admission_boundary_without_board_or_execution(tmp_path, kind):
     seeded = seed(tmp_path)
     if kind != "same-root":
         configure(seeded, kind)
@@ -222,11 +222,16 @@ def test_actual_cli_refuses_without_board_or_execution(tmp_path, kind):
     )
     assert result.returncode == 1, (result.stdout, result.stderr)
     error = json.loads(result.stderr)
-    assert error["reason"] == "invalid_assignment"
-    expected = (
-        "must differ" if kind == "same-root" else "reviewer-visible spec required"
-    )
-    assert expected in error["detail"]
+    if kind in VALID:
+        # Real CLI and validator; valid specs reach the unchanged ownership
+        # boundary. No live owner grant or live graph execution is attempted.
+        assert error["reason"] == "owner_grant_absent"
+    else:
+        assert error["reason"] == "invalid_assignment"
+        expected = (
+            "must differ" if kind == "same-root" else "reviewer-visible spec required"
+        )
+        assert expected in error["detail"]
     assert not marker.exists()
     assert_no_admission(seeded)
 

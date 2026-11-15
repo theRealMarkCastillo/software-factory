@@ -28,6 +28,7 @@ REASON_CODES = frozenset(
         "worker_failed",
         "worker_unavailable",
         "protocol_error",
+        "decision_required",
         "effect_unknown",
         # gates and review
         "evidence_rejected",

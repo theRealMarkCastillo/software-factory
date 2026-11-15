@@ -39,7 +39,9 @@ STATUSES = frozenset(
     }
 )
 
-OUTCOMES = frozenset({"completed", "failed", "unavailable", "ambiguous", "cancelled"})
+OUTCOMES = frozenset(
+    {"completed", "failed", "unavailable", "ambiguous", "cancelled", "needs_decision"}
+)
 
 
 def sha256_text(text: str) -> str:
@@ -410,8 +412,17 @@ class WorkerReceipt:
     artifact_references: tuple[str, ...] = ()
     reported_tests: tuple[str, ...] = ()
     detail: str = ""
+    decision: dict | None = None
 
     def __post_init__(self) -> None:
+        from .decisions import invalid_decision, sanitize_decision
+
+        if self.outcome == "needs_decision":
+            if self.candidate_sha is not None:
+                raise invalid_decision()
+            object.__setattr__(self, "decision", sanitize_decision(self.decision))
+        elif self.decision is not None:
+            raise invalid_decision()
         _require(
             self.outcome in OUTCOMES,
             "protocol_error",
@@ -428,6 +439,12 @@ class WorkerReceipt:
     def as_dict(self) -> dict:
         payload = asdict(self)
         payload["attempt"] = self.attempt.as_dict()
+        if self.decision is None:
+            payload.pop("decision")
+        else:
+            from .decisions import sanitize_decision
+
+            payload["decision"] = sanitize_decision(self.decision)
         return payload
 
 

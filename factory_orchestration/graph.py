@@ -469,15 +469,22 @@ def _receipt_from_payload(payload: Any, attempt: Attempt) -> WorkerReceipt:
     receipt = payload.get("receipt")
     if not isinstance(receipt, dict):
         raise OrchestrationError("protocol_error", "resume payload has no receipt")
+    return _worker_receipt(receipt, attempt)
+
+
+def _worker_receipt(receipt: dict, attempt: Attempt | None = None) -> WorkerReceipt:
+    from .operations import _attempt_from
+
     return WorkerReceipt(
         operation_key=receipt["operation_key"],
-        attempt=attempt,
+        attempt=attempt if attempt is not None else _attempt_from(receipt["attempt"]),
         session_id=receipt.get("session_id", ""),
         outcome=receipt.get("outcome", ""),
         candidate_sha=receipt.get("candidate_sha"),
         artifact_references=tuple(receipt.get("artifact_references") or ()),
         reported_tests=tuple(receipt.get("reported_tests") or ()),
         detail=receipt.get("detail", ""),
+        decision=receipt.get("decision"),
     )
 
 
@@ -590,7 +597,10 @@ def build_graph(deps: Deps, checkpointer=None):
             if updates.get("status") == "held":
                 # Classify marks intermediate checkpoints held: capture the
                 # failing stage before the wrapper replaces it with its name.
-                updates.setdefault("hold_record", hold_record({**state, **updates}))
+                updates.setdefault(
+                    "hold_record",
+                    state.get("hold_record") or hold_record({**state, **updates}),
+                )
             updates.setdefault("route", "continue")
             updates["stage"] = name
             updates["stage_sequence"] = int(state.get("stage_sequence", 0)) + 1
@@ -688,7 +698,9 @@ def build_graph(deps: Deps, checkpointer=None):
         if resolution.action == "hold":
             raise OrchestrationError("effect_unknown", resolution.detail)
         if resolution.action in {"adopt", "replay"}:
-            receipt = resolution.receipt_object
+            receipt = (
+                _worker_receipt(resolution.receipt) if resolution.receipt else None
+            )
             if receipt is None:
                 # A request exists but has no receipt yet: attach to the existing
                 # work and wait. Never submit a second request for the same key.
@@ -697,6 +709,9 @@ def build_graph(deps: Deps, checkpointer=None):
             deps.store.mark_operation(
                 key, "confirmed", receipt=_receipt_payload(receipt)
             )
+            # Await consumes the already-confirmed journal receipt, without
+            # polling a vanished process or submitting another effect.
+            operations[key].update({"state": "submitted"})
             return _advance(
                 state,
                 "await_worker",
@@ -744,7 +759,15 @@ def build_graph(deps: Deps, checkpointer=None):
         attempt = _attempt(state)
         request_id = operations[key].get("request_id", "")
         external = _handle(deps.worker, key, request_id)
-        receipt = deps.worker.poll(external)
+        journal = deps.store.operation(key) or {}
+        persisted = journal.get("receipt_json")
+        if isinstance(persisted, str):
+            persisted = json.loads(persisted)
+        receipt = (
+            _worker_receipt(persisted)
+            if journal.get("state") == "confirmed" and persisted
+            else deps.worker.poll(external)
+        )
         if receipt is None:
             payload = interrupt(
                 {
@@ -774,6 +797,22 @@ def build_graph(deps: Deps, checkpointer=None):
             "operations": operations,
             "worker_session_id": receipt.session_id,
         }
+        if receipt.outcome == "needs_decision":
+            from .decisions import sanitize_decision
+
+            return {
+                **updates,
+                "route": "hold_operator",
+                "last_reason_code": "decision_required",
+                "last_reason_detail": "worker requires a decision",
+                "candidate_sha": None,
+                "hold_record": {
+                    "stage": "await_worker",
+                    "reason": "decision_required",
+                    "detail": "worker requires a decision",
+                    **sanitize_decision(receipt.decision),
+                },
+            }
         if receipt.outcome == "completed":
             return _advance(
                 state,
@@ -1524,7 +1563,7 @@ def _pending_key(operations: dict, kind: str) -> str | None:
 
 
 def _receipt_payload(receipt: WorkerReceipt) -> dict:
-    return {
+    payload = {
         "operation_key": receipt.operation_key,
         "attempt": receipt.attempt.as_dict(),
         "session_id": receipt.session_id,
@@ -1534,6 +1573,11 @@ def _receipt_payload(receipt: WorkerReceipt) -> dict:
         "reported_tests": list(receipt.reported_tests),
         "detail": receipt.detail,
     }
+    if receipt.decision is not None:
+        from .decisions import sanitize_decision
+
+        payload["decision"] = sanitize_decision(receipt.decision)
+    return payload
 
 
 def _implementation_prompt(state: dict, repair_index: int) -> str:
@@ -1553,6 +1597,9 @@ def _implementation_prompt(state: dict, repair_index: int) -> str:
         "Do not run `hermes kanban` or use any Kanban tool: the orchestrator owns\n"
         "the card lifecycle. Change only files inside the workspace.\n"
     )
+    from .decisions import WORKER_DECISION_PROTOCOL
+
+    prompt += WORKER_DECISION_PROTOCOL
     if state.get("frozen_paths"):
         prompt += (
             "Do not modify these paths; a candidate that changes them is rejected: "

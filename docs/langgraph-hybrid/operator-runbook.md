@@ -41,10 +41,37 @@ Non-held inspection and `next_action` retain their existing output.
 
 The record's stage identifies the failing repair source when available, otherwise
 the pre-hold graph stage. Read reason/detail for the existing diagnosis. Empty
-question/options are intentional: this foundation cannot infer a human decision,
-read an excerpt from the spec, or parse a worker decision block. Resolve holds
+question/options are intentional for engine-originated holds: the engine cannot
+infer a human decision or read an excerpt from the spec. Resolve holds
 using the existing operator procedures; the record changes no authorization,
 repair budget, or candidate approval binding.
+
+For a worker-originated `decision_required` hold, stage is `await_worker` and
+detail is `worker requires a decision`. The full sanitized worker question,
+options, recommendation, answer format, and spec reference/excerpt appear in the
+checkpoint, `held` event, `inspect`, and `export`, identically after restart.
+Recommendation and answer format are data, never approval or commands to run.
+Resolve material uncertainty in the reviewed specification and restage; this
+increment does not apply answers autonomously or promote a candidate. No repair
+budget is spent, and acceptance/review are not invoked for that receipt, even
+when the workspace has a new HEAD.
+
+Workers request this hold using final text only: `FACTORY_NEEDS_DECISION_V1`, a
+newline, and exactly one strict JSON object with `spec_ref`, `spec_excerpt`,
+`question`, `options`, `recommendation`, `answer_format`. See the public worker
+skill for the schema and an example. Invalid marker layouts or decisions hold
+`protocol_error`; the adapter does not fall back to a candidate. Intermediate
+assistant/tool text and earlier results cannot authorize a decision. Missing
+terminal result events remain pending, not fabricated completions. A fresh
+adapter reconciles the producer's terminal exit status and does not resubmit.
+Raw transcripts remain producer-owned raw artifacts; new decision projections
+are redacted and bounded before persistence. Never supply credentials in an RFI.
+
+Minor reversible ambiguity instead stays on the normal candidate path: choose
+the simplest reading, log `RFI-n: question | chose | because` in `DECISIONS.md`,
+and continue checks/commit. The graph runtime includes both rules independently
+of the locally installed worker skill. No installed skill updates are required
+to obtain the runtime prompt behavior.
 
 ## Enrolment (explicit, per host)
 

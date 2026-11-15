@@ -1,6 +1,5 @@
 """Closed worker decision contract: real transports, safe receipts and graph holds."""
 
-import copy
 import json
 import sys
 from dataclasses import asdict
@@ -10,9 +9,8 @@ from factory_orch_fixtures import seed
 
 from factory_orchestration.adapters.hermes import HermesWorker
 from factory_orchestration.errors import OrchestrationError
-from factory_orchestration.graph import _receipt_payload
-from factory_orchestration.graph import thread_id
-from factory_orchestration.runner import export_run, inspect_run, drive
+from factory_orchestration.graph import _receipt_payload, thread_id
+from factory_orchestration.runner import drive, export_run, inspect_run
 from factory_orchestration.state import Attempt, WorkerReceipt, WorkerRequest
 
 MARKER = "FACTORY_NEEDS_DECISION_V1"
@@ -30,7 +28,9 @@ def decision():
 
 
 def receipt(**kwargs):
-    return WorkerReceipt("op", Attempt("t_abcd1234", 7, "factory-runner"), "s", **kwargs)
+    return WorkerReceipt(
+        "op", Attempt("t_abcd1234", 7, "factory-runner"), "s", **kwargs
+    )
 
 
 def test_decision_receipt_and_legacy_serialization():
@@ -38,13 +38,17 @@ def test_decision_receipt_and_legacy_serialization():
     assert r.as_dict()["decision"] == decision()
     assert _receipt_payload(r)["decision"] == decision()
     for outcome in ("completed", "failed", "unavailable", "ambiguous", "cancelled"):
-        r = receipt(outcome=outcome, candidate_sha="a" * 40 if outcome == "completed" else None)
+        r = receipt(
+            outcome=outcome, candidate_sha="a" * 40 if outcome == "completed" else None
+        )
         expected = asdict(r)
         expected.pop("decision", None)
         assert r.as_dict() == expected
+        assert json.dumps(r.as_dict()) == json.dumps(expected)
         expected["artifact_references"] = []
         expected["reported_tests"] = []
         assert _receipt_payload(r) == expected
+        assert json.dumps(_receipt_payload(r)) == json.dumps(expected)
 
 
 def invalid_decisions():
@@ -53,7 +57,13 @@ def invalid_decisions():
         d = decision()
         del d[key]
         values.append(d)
-    for key in ("spec_ref", "spec_excerpt", "question", "recommendation", "answer_format"):
+    for key in (
+        "spec_ref",
+        "spec_excerpt",
+        "question",
+        "recommendation",
+        "answer_format",
+    ):
         for value in (False, 1, None, [], "\ud800"):
             values.append({**decision(), key: value})
     for key in ("question", "answer_format"):
@@ -69,7 +79,10 @@ def invalid_decisions():
         d = decision()
         d["options"][0]["id"] = value
         values.append(d)
-    for option in ({"id": "A", "label": "L"}, {**decision()["options"][0], "extra": "x"}):
+    for option in (
+        {"id": "A", "label": "L"},
+        {**decision()["options"][0], "extra": "x"},
+    ):
         values.append({**decision(), "options": [option]})
     values += [
         {**decision(), "options": decision()["options"] * 2},
@@ -88,7 +101,10 @@ def test_invalid_decisions_are_constant_protocol_errors(value):
     assert exc.value.detail == "invalid worker decision"
 
 
-@pytest.mark.parametrize("outcome,candidate", [("completed", "a" * 40), ("failed", None), ("needs_decision", "a" * 40)])
+@pytest.mark.parametrize(
+    "outcome,candidate",
+    [("completed", "a" * 40), ("failed", None), ("needs_decision", "a" * 40)],
+)
 def test_decision_outcome_binding(outcome, candidate):
     with pytest.raises(OrchestrationError) as exc:
         receipt(outcome=outcome, candidate_sha=candidate, decision=decision())
@@ -96,17 +112,39 @@ def test_decision_outcome_binding(outcome, candidate):
 
 
 def result(text, exit_code=0):
-    return {"type": "result", "session_id": "session", "exit_code": exit_code,
-            "text": text, "tokens": 12, "duration_ms": 10, "timestamp": "2026-01-01T00:00:00Z"}
+    return {
+        "type": "result",
+        "session_id": "session",
+        "exit_code": exit_code,
+        "text": text,
+        "tokens": 12,
+        "duration_ms": 10,
+        "timestamp": "2026-01-01T00:00:00Z",
+    }
 
 
 def launch(tmp_path, events, *, exit_code=0):
     executable = tmp_path / "fake-hermes"
-    executable.write_text(f"#!{sys.executable}\nimport json\n" + "\n".join(f"print({json.dumps(json.dumps(e))})" for e in events) + f"\nraise SystemExit({exit_code})\n")
+    executable.write_text(
+        f"#!{sys.executable}\nimport json\n"
+        + "\n".join(f"print({json.dumps(json.dumps(e))})" for e in events)
+        + f"\nraise SystemExit({exit_code})\n"
+    )
     executable.chmod(0o755)
     worker = HermesWorker(tmp_path / "effects", executable=str(executable))
-    request = WorkerRequest("op", Attempt("t_abcd1234", 7, "factory-runner"), "worker", "sha256:" + "a" * 64,
-                            str(tmp_path), "a" * 40, (str(tmp_path),), 0, 30, str(tmp_path), "bounded")
+    request = WorkerRequest(
+        "op",
+        Attempt("t_abcd1234", 7, "factory-runner"),
+        "worker",
+        "sha256:" + "a" * 64,
+        str(tmp_path),
+        "a" * 40,
+        (str(tmp_path),),
+        0,
+        30,
+        str(tmp_path),
+        "bounded",
+    )
     handle = worker.submit(request).handle
     worker._processes["op"].wait(timeout=10)
     return worker, handle
@@ -127,17 +165,30 @@ def test_real_process_final_decision_transport(tmp_path, fresh):
 
 
 BAD_TEXTS = [
-    MARKER, MARKER + "\n", "prose\n" + MARKER + "\n{}",
-    "```\n" + MARKER + "\n{}\n```", MARKER + " {}", MARKER + "\r\n{}",
-    MARKER + "\n{}\n" + MARKER, MARKER + "\n{} trailing",
-    MARKER + "\n" + json.dumps(decision()).replace('"question":', '"question":"other", "question":'),
-    MARKER + "\n" + json.dumps(decision()).replace('"question": "Which storage contract?"', '"question": NaN'),
+    MARKER,
+    MARKER + "\n",
+    "prose\n" + MARKER + "\n{}",
+    "```\n" + MARKER + "\n{}\n```",
+    MARKER + " {}",
+    MARKER + "\r\n{}",
+    MARKER + "\n{}\n" + MARKER,
+    MARKER + "\n{} trailing",
+    MARKER
+    + "\n"
+    + json.dumps(decision()).replace('"question":', '"question":"other", "question":'),
+    MARKER
+    + "\n"
+    + json.dumps(decision()).replace(
+        '"question": "Which storage contract?"', '"question": NaN'
+    ),
     MARKER + "\n" + json.dumps({**decision(), "question": "x" * 17000}),
 ]
 
 
 @pytest.mark.parametrize("fresh", [False, True])
-@pytest.mark.parametrize("text", BAD_TEXTS)
+@pytest.mark.parametrize(
+    "text", BAD_TEXTS, ids=[f"layout-{i}" for i in range(len(BAD_TEXTS))]
+)
 def test_invalid_marker_never_falls_back(tmp_path, fresh, text):
     worker, handle = launch(tmp_path, [result(text)])
     with pytest.raises(OrchestrationError) as exc:
@@ -152,8 +203,16 @@ def test_invalid_marker_never_falls_back(tmp_path, fresh, text):
 @pytest.mark.parametrize("fresh", [False, True])
 def test_last_result_only_and_nonzero_exit(tmp_path, fresh):
     text = MARKER + "\n" + json.dumps(decision())
-    worker, handle = launch(tmp_path, [result(text), {"type": "assistant", "text": text}, result("done")], exit_code=3)
-    payload = HermesWorker(worker.artifact_root).probe("op").receipt if fresh else worker.poll(handle).as_dict()
+    worker, handle = launch(
+        tmp_path,
+        [result(text), {"type": "assistant", "text": text}, result("done")],
+        exit_code=3,
+    )
+    payload = (
+        HermesWorker(worker.artifact_root).probe("op").receipt
+        if fresh
+        else worker.poll(handle).as_dict()
+    )
     # A restarted adapter has only the producer exit status; make that failure explicit too.
     if fresh:
         assert payload["outcome"] != "needs_decision"
@@ -168,12 +227,20 @@ def test_graph_decision_holds_without_spending_or_acceptance(tmp_path):
     r = drive(s["deps"], s["assignment"], s["attempt"])
     thread = thread_id(s["assignment"])
     assert r.state["status"] == "held"
-    record = {"stage": "await_worker", "reason": "decision_required", "detail": "worker requires a decision", **decision()}
+    record = {
+        "stage": "await_worker",
+        "reason": "decision_required",
+        "detail": "worker requires a decision",
+        **decision(),
+    }
     assert r.state["hold_record"] == record
     assert s["deps"].store.repair_count(thread) == 0
-    assert not list((tmp_path / "effects" / "gate-requests").glob("*"))
-    assert not list((tmp_path / "effects" / "review-requests").glob("*"))
+    assert {op["kind"] for op in s["deps"].store.operations(thread)} == {"worker"}
+    assert not list((tmp_path / "effects" / "gate-receipts").glob("*"))
+    assert not list((tmp_path / "effects" / "review-receipts").glob("*"))
     assert inspect_run(s["deps"], thread)["hold_record"] == record
     assert export_run(s["deps"], thread)["state"]["hold_record"] == record
-    assert drive(s["deps"], s["assignment"], s["attempt"]).state["hold_record"] == record
+    assert (
+        drive(s["deps"], s["assignment"], s["attempt"]).state["hold_record"] == record
+    )
     assert len(s["worker"].submitted) == 1

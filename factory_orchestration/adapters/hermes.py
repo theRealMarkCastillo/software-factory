@@ -526,10 +526,12 @@ class HermesWorker:
         process = self._processes.get(handle.operation_key)
         record = self._records.get(handle.operation_key) or {}
         if process is None:
-            payload = self._read_result(handle.operation_key)
-            if payload is None:
-                return None
-            return self._receipt_from(handle.operation_key, payload, session_id="")
+            probe = self.probe(handle.operation_key)
+            if probe.receipt is not None:
+                return self._receipt_from(
+                    handle.operation_key, probe.receipt, session_id=""
+                )
+            return None
         exit_code = process.poll()
         if exit_code is None:
             started = float(record.get("started", time.time()))
@@ -539,10 +541,16 @@ class HermesWorker:
                     handle.operation_key, "unavailable", "worker exceeded its timeout"
                 )
             return None
-        session_id, failed = parse_stream_transcript(record.get("transcript", ""))
-        if exit_code != 0 or failed:
+        event = worker_result_event(record.get("transcript"))
+        if exit_code != 0 or (event is not None and event["exit_code"] != 0):
             detail = f"worker exited {exit_code}"
             return self._failed(handle.operation_key, "failed", detail)
+        if event is None:
+            return None
+        session_id = event["session_id"]
+        receipt = self._terminal_receipt(handle.operation_key, record, event)
+        if receipt is not None:
+            return receipt
         payload = self._read_result(handle.operation_key)
         if payload is None:
             # No side-channel result file: derive the receipt from the durable
@@ -595,19 +603,25 @@ class HermesWorker:
         )
 
     def _read_result(self, key: str) -> dict | None:
+        from ..decisions import worker_payload
+
         record = self._records.get(key) or {}
         path = Path(record.get("result_path", self._dir(key) / "worker-result.json"))
         try:
-            payload = json.loads(path.read_text())
-        except (OSError, ValueError):
+            payload = worker_payload(path.read_text())
+        except OSError:
             return None
         if not isinstance(payload, dict):
             return None
         return payload
 
     def _receipt_from(
-        self, key: str, payload: dict, *, session_id: str
+        self, key: str, payload: object, *, session_id: str
     ) -> WorkerReceipt:
+        if not isinstance(payload, dict):
+            from ..decisions import invalid_decision
+
+            raise invalid_decision()
         attempt = payload.get("attempt") or {}
         from ..operations import _attempt_from
 
@@ -626,6 +640,7 @@ class HermesWorker:
             artifact_references=tuple(payload.get("artifact_references") or ()),
             reported_tests=tuple(payload.get("reported_tests") or ()),
             detail=str(payload.get("detail") or ""),
+            decision=payload.get("decision"),
         )
 
     def _failed(self, key: str, outcome: str, detail: str) -> WorkerReceipt:
@@ -658,15 +673,22 @@ class HermesWorker:
         """
 
         if self._receipt_path(operation_key).is_file():
+            from ..decisions import worker_payload
+
+            receipt = self._receipt_from(
+                operation_key,
+                worker_payload(self._receipt_path(operation_key).read_text()),
+                session_id="",
+            )
             return EffectProbe(
                 "present",
-                receipt=json.loads(self._receipt_path(operation_key).read_text()),
+                receipt=receipt.as_dict(),
             )
         record = self._record(operation_key)
         if not record:
             return EffectProbe("absent")
-        finished, exit_code, session_id = transcript_result(record.get("transcript"))
-        if not finished:
+        event = worker_result_event(record.get("transcript"))
+        if event is None:
             return EffectProbe(
                 "unknown",
                 detail=(
@@ -679,10 +701,27 @@ class HermesWorker:
         receipt = self._durable_receipt(
             operation_key,
             record,
-            exit_code=exit_code or 0,
-            session_id=session_id,
+            exit_code=event["exit_code"],
+            session_id=event["session_id"],
         )
         return EffectProbe("present", receipt=receipt.as_dict())
+
+    def _terminal_receipt(
+        self, key: str, record: dict, event: dict
+    ) -> WorkerReceipt | None:
+        from ..decisions import terminal_decision
+        from ..operations import _attempt_from
+
+        decision = terminal_decision(event["text"])
+        if decision is None:
+            return None
+        return WorkerReceipt(
+            operation_key=key,
+            attempt=_attempt_from(record.get("attempt") or {}),
+            session_id=event["session_id"],
+            outcome="needs_decision",
+            decision=decision,
+        )
 
     def _record(self, operation_key: str) -> dict:
         try:
@@ -711,6 +750,11 @@ class HermesWorker:
                 outcome="failed",
                 detail=f"worker exited {exit_code}",
             )
+        event = worker_result_event(record.get("transcript"))
+        if event is not None:
+            receipt = self._terminal_receipt(key, record, event)
+            if receipt is not None:
+                return receipt
         payload = self._read_result(key)
         if payload is not None:
             return self._receipt_from(key, payload, session_id=session_id)
@@ -746,6 +790,36 @@ class HermesWorker:
 # ---------------------------------------------------------------------------
 # Stream parsing shared by worker and reviewer
 # ---------------------------------------------------------------------------
+
+
+def worker_result_event(path: str | Path | None) -> dict | None:
+    """Last well-formed top-level producer result, never interim event text.
+
+    Worker-only: reviewer parsing and its historical completion rules are unchanged.
+    """
+    from ..decisions import strict_json
+
+    last = None
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    event = strict_json(line)
+                except OrchestrationError:
+                    continue
+                if (
+                    isinstance(event, dict)
+                    and event.get("type") == "result"
+                    and type(event.get("exit_code")) is int
+                    and isinstance(event.get("session_id"), str)
+                    and isinstance(event.get("text"), str)
+                ):
+                    last = event
+    except (OSError, UnicodeError):
+        return last
+    return last
 
 
 def parse_stream_transcript(path: str | Path) -> tuple[str, bool]:

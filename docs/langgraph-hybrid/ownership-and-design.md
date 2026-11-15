@@ -76,7 +76,7 @@ bounding: detail 4096 bytes, spec reference/excerpt 1024 bytes, stage/reason 128
 bytes. Prefixes end on valid UTF-8 boundaries. Question, recommendation and
 answer format are empty strings; options is an empty list. The engine neither
 reads spec content for an excerpt nor invents a decision. Worker decision
-receipt parsing is not implemented by this foundation.
+receipts use the separate closed decision protocol below.
 
 The node wrapper captures the record when `classify` first sets `status=held`,
 before changing the stage name. Each of the four hold nodes retains that record
@@ -89,6 +89,57 @@ This diagnostic projection does not rewrite immutable assignment references,
 prior repair context, original artifacts, or existing output fields. Those
 existing sinks retain their existing contracts; redaction here is not permission
 to put credentials into a spec path or assignment.
+
+### Worker decisions
+
+`WorkerReceipt.decision` is optional and omitted from serialization when absent;
+all pre-existing receipt outcomes retain their serialized shape. Outcome
+`needs_decision` requires a decision and a null candidate. Any decision on
+another outcome, or any malformed decision, is a constant `protocol_error`
+without supplied values in its diagnostic.
+
+The real worker adapter inspects only the last well-formed top-level stream-JSON
+`result` event's `text`, after a successful subprocess exit. Fresh probes rely on
+the producer result's exit status. A missing terminal event remains pending.
+Only `FACTORY_NEEDS_DECISION_V1` followed by a newline and one JSON object is
+recognized; a marker anywhere with invalid layout is refused, never replaced by
+workspace success. The marker takes precedence over sidechannel results and
+HEAD. Tool/assistant interim events, prose, and earlier result text confer no
+authority. Nonzero worker exits retain failure behavior.
+
+The decision has exactly `spec_ref`, `spec_excerpt`, `question`, `options`,
+`recommendation`, `answer_format`. All are strings except options: 1–4 exact
+`{id,label,consequence}` objects. IDs match `[A-Za-z0-9_-]{1,16}`, are unique,
+and recommendation is empty or one ID. Reference/excerpt may be empty; question,
+answer format, labels and consequences must be nonblank. Unknown/missing keys,
+wrong types, duplicate JSON keys, non-finite values, lone surrogates and raw JSON
+over 16384 UTF-8 bytes are rejected before redaction (direct dict receipts use
+compact UTF-8 JSON for the size check).
+
+Semantic validation precedes `redact_diagnostic`, then UTF-8 prefix bounds:
+reference/excerpt/question 1024 bytes, label 256, consequence 512, answer format
+256. Required fields cannot become blank after bounding. IDs/recommendation
+cannot change under redaction. These last two fields remain data, not authority.
+Validated projections are sanitized before journal receipt persistence and new
+events/diagnostics. Raw transcript artifacts remain raw; encoded/split secrets
+are outside the diagnostic redaction contract.
+
+The graph routes directly from `await_worker` to `hold_operator` with reason
+`decision_required`, detail `worker requires a decision`, and the sanitized
+worker fields in the hold record. Classification preserves that record rather
+than replacing its question with an engine fallback. Checkpoint, held event,
+inspect and export retain the same record after restart. No candidate is bound,
+even if HEAD changed; no repair budget, acceptance, review, or promotion runs.
+Adoption/replay reconstructs the resolution payload in the graph rather than
+using the legacy `Resolution.receipt_object` (which has no decision field),
+keeping the operations module and store schema unchanged. Existing attempt and
+operation binding checks remain in force; no identity is minted.
+
+Runtime prompts include the public worker RFI guidance even with an older
+installed skill: minor reversible ambiguity is logged as
+`RFI-n: question | chose | because` in candidate `DECISIONS.md`; material
+irreversible/schema/auth/money/public-contract uncertainty emits the decision
+transport. No decision application or spec-path admission change is included.
 
 ## State schema
 

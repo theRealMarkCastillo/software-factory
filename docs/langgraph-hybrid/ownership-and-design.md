@@ -119,7 +119,8 @@ compact UTF-8 JSON for the size check).
 Semantic validation precedes `redact_diagnostic`, then UTF-8 prefix bounds:
 reference/excerpt/question 1024 bytes, label 256, consequence 512, answer format
 256. Required fields cannot become blank after bounding. IDs/recommendation
-cannot change under redaction. These last two fields remain data, not authority.
+cannot change under redaction. Recommendation and answer format remain data,
+not authority.
 Validated projections are sanitized before journal receipt persistence and new
 events/diagnostics. Raw transcript artifacts remain raw; encoded/split secrets
 are outside the diagnostic redaction contract.

@@ -15,6 +15,7 @@ from factory import verify
 from factory.evidence import verify_evidence
 from factory_orchestration.adapters.gates import InstalledLauncherGate
 from factory_orchestration.cli import _assignment_payload
+from factory_orchestration.decisions import WORKER_DECISION_PROTOCOL
 from factory_orchestration.errors import OrchestrationError
 from factory_orchestration.graph import _implementation_prompt, thread_id
 from factory_orchestration.runner import assignment_from_state, resume
@@ -267,8 +268,13 @@ def test_prompt_and_json_assignment_boundary():
     assert payload["frozen_paths"] == paths
     prompt = _implementation_prompt({**PROMPT_STATE, "frozen_paths": paths}, 0)
     prefix = "Do not modify these paths; a candidate that changes them is rejected: "
-    assert prompt == GOLDEN + prefix + json.dumps(paths) + "\n"
-    assert _implementation_prompt({**PROMPT_STATE, "frozen_paths": ()}, 0) == GOLDEN
+    assert (
+        prompt == GOLDEN + WORKER_DECISION_PROTOCOL + prefix + json.dumps(paths) + "\n"
+    )
+    assert (
+        _implementation_prompt({**PROMPT_STATE, "frozen_paths": ()}, 0)
+        == GOLDEN + WORKER_DECISION_PROTOCOL
+    )
 
 
 def test_empty_assignment_serialization_preserves_legacy_bytes(tmp_path):

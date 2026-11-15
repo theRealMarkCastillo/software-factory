@@ -29,6 +29,14 @@ def pending(tmp_path, poll):
     executable.chmod(0o755)
     worker = HermesWorker(tmp_path / "producer", executable=str(executable))
     s["deps"].worker = worker
+    s["submissions"] = []
+    actual_submit = worker.submit
+
+    def submit(request):
+        s["submissions"].append(request.operation_key)
+        return actual_submit(request)
+
+    worker.submit = submit
     actual_poll = worker.poll
     worker.poll = lambda handle: None
     first = runner.drive(s["deps"], s["assignment"], s["attempt"])
@@ -105,6 +113,7 @@ def no_progress(s):
     operations = s["deps"].store.operations(s["thread"])
     assert len(operations) == 1
     assert operations[0]["kind"] == "worker"
+    assert s["submissions"] == [s["key"]]
     assert len(s["real_worker"]._processes) == 1
 
 
@@ -229,7 +238,19 @@ def test_preinvoke_crash_reopens_without_source_or_raw_checkpoint_payload(
     s = pending(tmp_path, "completed")
     canary = secrets.token_hex(24)
     monkeypatch.setenv("REFUSAL_TEST_SECRET", canary)
-    payload = incoming(s, kind, {**decision(), "question": canary})
+    source_kind = "raw_stale" if kind == "typed_stale" else kind
+    raw = incoming(s, source_kind, {**decision(), "question": canary})
+    source = s["real_worker"]._receipt_path(s["key"])
+    source.write_text(json.dumps(raw["receipt"]))
+    if kind == "typed_stale":
+        fresh = HermesWorker(s["real_worker"].artifact_root)
+        typed = fresh.probe(s["key"]).worker_receipt
+        assert typed.attempt.run_id == 6
+        payload = _WorkerResume(typed)
+    else:
+        payload = raw
+    keeper = sqlite3.connect(s["state_dir"] / "checkpoints.sqlite")
+    assert keeper.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
     invoke_crash(s, monkeypatch, payload)
     record = s["deps"].store.operation(s["key"])
     expected = (
@@ -246,9 +267,11 @@ def test_preinvoke_crash_reopens_without_source_or_raw_checkpoint_payload(
         }
     # Raw producer data is no longer available. A completed live poll remains
     # available, but recovery must not consult it or the vanished raw source.
-    for path in s["real_worker"]._dir(s["key"]).iterdir():
-        if path.is_file():
-            path.unlink()
+    source.unlink()
+    assert not source.exists()
+    assert (
+        s["real_worker"].poll(WorkerHandle(s["key"], "fixture")).outcome == "completed"
+    )
 
     def forbidden(*args):
         raise AssertionError("recovery consulted producer instead of canonical journal")
@@ -266,7 +289,10 @@ def test_preinvoke_crash_reopens_without_source_or_raw_checkpoint_payload(
             canary.encode() not in bytes(row[0])
             for row in connection.execute("SELECT value FROM writes")
         )
+    assert (s["state_dir"] / "checkpoints.sqlite-wal").exists()
+    assert (s["state_dir"] / "checkpoints.sqlite-shm").exists()
     assert all(
         canary.encode() not in p.read_bytes() for p in s["state_dir"].glob("*.sqlite*")
     )
+    keeper.close()
     no_progress(s)

@@ -832,6 +832,10 @@ def build_graph(deps: Deps, checkpointer=None):
             from .decisions import invalid_decision
 
             raise invalid_decision()
+        if persisted and persisted.get("kind") == "worker_stale_attempt":
+            raise OrchestrationError(
+                "stale_attempt", "receipt from a superseded attempt"
+            )
         receipt = (
             _journal_worker_receipt(journal, state, key)
             if persisted

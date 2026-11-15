@@ -248,7 +248,7 @@ def _decision_ingress(deps: Deps, state: dict, attempt: Attempt, payload):
     """
     from .decisions import invalid_decision
     from .graph import _pending_key, _receipt_payload, _worker_receipt
-    from .operations import _WorkerResume
+    from .operations import _attempt_from, _WorkerResume
 
     typed = payload.receipt if isinstance(payload, _WorkerResume) else None
     raw = payload.get("receipt") if isinstance(payload, dict) else None
@@ -270,40 +270,53 @@ def _decision_ingress(deps: Deps, state: dict, attempt: Attempt, payload):
         return {"kind": "cancelled"}
     key = _pending_key(state.get("operations") or {}, "worker")
     record = deps.store.operation(key) if key else None
-    try:
-        receipt = typed or _worker_receipt(raw, attempt)
-        if (
-            record is None
-            or receipt.operation_key != key
-            or record.get("thread_id") != state["run_id"]
-            or record.get("kind") != "worker"
-        ):
-            raise invalid_decision()
-        if receipt.attempt.run_id != attempt.run_id:
-            return {"kind": "worker_stale_attempt"}
-        # Do not confirm an effect here: await_worker retains that authority.
+    # Establish binding BEFORE any mutation. Reference-shaped external JSON has
+    # no receipt identity and cannot acquire provenance from a matching key.
+    supplied_key = (
+        typed.operation_key
+        if typed
+        else (raw.get("operation_key") if isinstance(raw, dict) else None)
+    )
+    if (
+        record is None
+        or supplied_key != key
+        or record.get("thread_id") != state["run_id"]
+        or record.get("kind") != "worker"
+        or (isinstance(payload, dict) and "worker_journal_key" in payload)
+    ):
+        raise invalid_decision()
+
+    def refuse(kind):
+        # Static and durable before Command: refusal beats both canonical replay
+        # and a successful live poll, including after a pre-invoke crash.
         deps.store.mark_operation(
-            key, record["state"], receipt=_receipt_payload(receipt)
+            key, record["state"], receipt={"operation_key": key, "kind": kind}
         )
-        return {"worker_journal_key": key}
+        return {"kind": kind}
+
+    try:
+        supplied_attempt = typed.attempt if typed else _attempt_from(raw["attempt"])
+    except (KeyError, TypeError, ValueError):
+        return refuse("worker_protocol_error")
+    if (
+        supplied_attempt.task_id != attempt.task_id
+        or supplied_attempt.profile != attempt.profile
+    ):
+        raise invalid_decision()
+    if supplied_attempt.run_id != attempt.run_id:
+        return refuse("worker_stale_attempt")
+    try:
+        # Decision identity is never replaced by the current attempt. The legacy
+        # non-decision helper/override contract remains unchanged.
+        receipt = typed or _worker_receipt(raw)
     except (OrchestrationError, KeyError, TypeError, ValueError):
-        # No raw fields (including unknown/malformed keys) can enter checkpoint writes.
-        # Persist the static refusal so a concurrently completed poll cannot
-        # override malformed explicit decision input or turn it into acceptance.
-        if (
-            record
-            and record.get("thread_id") == state["run_id"]
-            and record.get("kind") == "worker"
-        ):
-            deps.store.mark_operation(
-                key,
-                record["state"],
-                receipt={
-                    "operation_key": key,
-                    "kind": "worker_protocol_error",
-                },
-            )
-        return {"kind": "worker_protocol_error"}
+        return refuse("worker_protocol_error")
+    persisted = json.loads(record["receipt_json"]) if record.get("receipt_json") else {}
+    if persisted.get("kind") in {"worker_protocol_error", "worker_stale_attempt"}:
+        return {"kind": persisted["kind"]}
+    # Do not confirm an effect here: await_worker retains that authority.
+    deps.store.mark_operation(key, record["state"], receipt=_receipt_payload(receipt))
+    return {"worker_journal_key": key}
 
 
 def _require_matching_versions(state: dict) -> None:
@@ -415,8 +428,8 @@ def adopt_pending_effect(deps: Deps, state: dict) -> dict:
             "confirmed",
         } and canonical.get("receipt_json"):
             stored = json.loads(canonical["receipt_json"])
-            if stored.get("kind") == "worker_protocol_error":
-                return {"kind": "worker_protocol_error"}
+            if stored.get("kind") in {"worker_protocol_error", "worker_stale_attempt"}:
+                return {"kind": stored["kind"]}
             if stored.get("outcome") == "needs_decision":
                 return _WorkerResume(_journal_worker_receipt(canonical, state, key))
     adapter = deps.reviewer if kind == "review" else deps.worker

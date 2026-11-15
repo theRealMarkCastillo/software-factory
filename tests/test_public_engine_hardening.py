@@ -198,13 +198,20 @@ def test_tracked_spec_with_base_blob_digest_is_admitted(tmp_path, source):
     seeded = seed(tmp_path)
     spec = seeded["repo" if source == "repo" else "workspace"] / "card-spec.md"
     assignment = replace(seeded["assignment"], spec_reference=str(spec))
-    result = drive(seeded["deps"], assignment, seeded["attempt"])
     if source == "repo":
-        # Admission accepts the base blob, but reviewer focus may not guess a
-        # workspace-relative location for a repository-only reference.
-        assert result.status == "held"
-        assert result.state["last_reason_code"] == "invalid_assignment"
+        # A tracked repository copy is still invisible to the workspace reviewer.
+        for name in ("worker", "gate", "reviewer"):
+            setattr(seeded["deps"], name, Mock(wraps=getattr(seeded["deps"], name)))
+        with pytest.raises(OrchestrationError) as exc:
+            drive(seeded["deps"], assignment, seeded["attempt"])
+        assert exc.value.reason == "invalid_assignment"
+        for name in ("worker", "gate", "reviewer"):
+            assert getattr(seeded["deps"], name).mock_calls == []
+        store = seeded["deps"].store
+        assert store.connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        assert not store.checkpoint_path.exists()
     else:
+        result = drive(seeded["deps"], assignment, seeded["attempt"])
         assert result.status == "ready_for_authorized_completion"
 
 

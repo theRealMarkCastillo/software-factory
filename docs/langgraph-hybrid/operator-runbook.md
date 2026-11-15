@@ -67,6 +67,22 @@ adapter reconciles the producer's terminal exit status and does not resubmit.
 Raw transcripts remain producer-owned raw artifacts; new decision projections
 are redacted and bounded before persistence. Never supply credentials in an RFI.
 
+Decision JSON in an explicit resume payload, worker sidechannel, or standalone
+`receipt.json` is **raw input**, not proof of prior sanitation. This includes a
+manually copied `WorkerReceipt.as_dict()` diagnostic projection: it is validated
+and redacted as new raw input, and overlapping credential values can change its
+bytes. Caller flags, marker-looking text, versions, or public hashes do not
+confer trusted status. Use the existing no-payload resume/adopt-journal flow for
+stable replay; no new publication command or external reference API is required.
+Engine-owned typed receipts retain sanitation provenance in process. Canonical
+journal reconstruction validates the operation/run/spec binding without redacting
+again. Only a bound journal reference or static protocol-error diagnostic reaches
+the decision resume checkpoint boundary; malformed raw fields are not persisted.
+No-marker sidechannels that do not claim the decision protocol retain the legacy
+permissive parsing and workspace-HEAD fallback. A real decision field (including
+one hidden by a duplicate key) or terminal decision marker still requires strict
+protocol validation and cannot fall back to a candidate.
+
 Minor reversible ambiguity instead stays on the normal candidate path: choose
 the simplest reading, log `RFI-n: question | chose | because` in `DECISIONS.md`,
 and continue checks/commit. The graph runtime includes both rules independently

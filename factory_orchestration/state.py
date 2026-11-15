@@ -415,12 +415,12 @@ class WorkerReceipt:
     decision: dict | None = None
 
     def __post_init__(self) -> None:
-        from .decisions import invalid_decision, sanitize_decision
+        from .decisions import invalid_decision, owned_decision
 
         if self.outcome == "needs_decision":
             if self.candidate_sha is not None:
                 raise invalid_decision()
-            object.__setattr__(self, "decision", sanitize_decision(self.decision))
+            object.__setattr__(self, "decision", owned_decision(self.decision))
         elif self.decision is not None:
             raise invalid_decision()
         _require(
@@ -437,14 +437,18 @@ class WorkerReceipt:
             _full_sha(self.candidate_sha, "candidate_sha")
 
     def as_dict(self) -> dict:
-        payload = asdict(self)
-        payload["attempt"] = self.attempt.as_dict()
-        if self.decision is None:
-            payload.pop("decision")
-        else:
-            from .decisions import sanitize_decision
-
-            payload["decision"] = sanitize_decision(self.decision)
+        payload = {
+            "operation_key": self.operation_key,
+            "attempt": self.attempt.as_dict(),
+            "session_id": self.session_id,
+            "outcome": self.outcome,
+            "candidate_sha": self.candidate_sha,
+            "artifact_references": self.artifact_references,
+            "reported_tests": self.reported_tests,
+            "detail": self.detail,
+        }
+        if self.decision is not None:
+            payload["decision"] = self.decision.as_dict()
         return payload
 
 

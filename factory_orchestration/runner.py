@@ -202,6 +202,9 @@ def drive(
                 if resume_payload is not None and snapshot.next:
                     from langgraph.types import Command
 
+                    resume_payload = _decision_ingress(
+                        deps, snapshot.values, attempt, resume_payload
+                    )
                     graph.invoke(Command(resume=resume_payload), config)
                 elif snapshot.next and _interrupt_payload(snapshot) is not None:
                     # A persisted wait: return it instead of sleeping or advancing.
@@ -235,6 +238,72 @@ def drive(
         state=values,
         awaiting=awaiting,
     )
+
+
+def _decision_ingress(deps: Deps, state: dict, attempt: Attempt, payload):
+    """Own raw decision input BEFORE LangGraph persists Command.resume.
+
+    Only a bound engine journal reference crosses the checkpoint boundary.
+    The private typed transport is never reconstructed from external JSON.
+    """
+    from .decisions import invalid_decision
+    from .graph import _pending_key, _receipt_payload, _worker_receipt
+    from .operations import _WorkerResume
+
+    typed = payload.receipt if isinstance(payload, _WorkerResume) else None
+    raw = payload.get("receipt") if isinstance(payload, dict) else None
+    claimed = isinstance(payload, dict) and (
+        "decision" in payload
+        or "worker_journal_key" in payload
+        or payload.get("outcome") == "needs_decision"
+    )
+    if (
+        typed is None
+        and not claimed
+        and not (
+            isinstance(raw, dict)
+            and ("decision" in raw or raw.get("outcome") == "needs_decision")
+        )
+    ):
+        return payload
+    if isinstance(payload, dict) and payload.get("kind") == "cancelled":
+        return {"kind": "cancelled"}
+    key = _pending_key(state.get("operations") or {}, "worker")
+    record = deps.store.operation(key) if key else None
+    try:
+        receipt = typed or _worker_receipt(raw, attempt)
+        if (
+            record is None
+            or receipt.operation_key != key
+            or record.get("thread_id") != state["run_id"]
+            or record.get("kind") != "worker"
+        ):
+            raise invalid_decision()
+        if receipt.attempt.run_id != attempt.run_id:
+            return {"kind": "worker_stale_attempt"}
+        # Do not confirm an effect here: await_worker retains that authority.
+        deps.store.mark_operation(
+            key, record["state"], receipt=_receipt_payload(receipt)
+        )
+        return {"worker_journal_key": key}
+    except (OrchestrationError, KeyError, TypeError, ValueError):
+        # No raw fields (including unknown/malformed keys) can enter checkpoint writes.
+        # Persist the static refusal so a concurrently completed poll cannot
+        # override malformed explicit decision input or turn it into acceptance.
+        if (
+            record
+            and record.get("thread_id") == state["run_id"]
+            and record.get("kind") == "worker"
+        ):
+            deps.store.mark_operation(
+                key,
+                record["state"],
+                receipt={
+                    "operation_key": key,
+                    "kind": "worker_protocol_error",
+                },
+            )
+        return {"kind": "worker_protocol_error"}
 
 
 def _require_matching_versions(state: dict) -> None:
@@ -335,11 +404,33 @@ def adopt_pending_effect(deps: Deps, state: dict) -> dict:
         )
     key, record = pending[-1]
     kind = str(record.get("kind") or "worker")
+    if kind == "worker":
+        from .graph import _journal_worker_receipt
+        from .operations import _WorkerResume
+
+        canonical = deps.store.operation(key) or {}
+        if canonical.get("state") in {
+            "submitted",
+            "unknown",
+            "confirmed",
+        } and canonical.get("receipt_json"):
+            stored = json.loads(canonical["receipt_json"])
+            if stored.get("kind") == "worker_protocol_error":
+                return {"kind": "worker_protocol_error"}
+            if stored.get("outcome") == "needs_decision":
+                return _WorkerResume(_journal_worker_receipt(canonical, state, key))
     adapter = deps.reviewer if kind == "review" else deps.worker
     probe = adapter.probe(key)
     if probe.state == "present" and probe.receipt:
         if kind == "review":
             return {"review": probe.receipt}
+        if (
+            probe.worker_receipt is not None
+            and probe.worker_receipt.decision is not None
+        ):
+            from .operations import _WorkerResume
+
+            return _WorkerResume(probe.worker_receipt)
         return {"receipt": probe.receipt}
     if probe.state == "unknown":
         raise OrchestrationError(

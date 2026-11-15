@@ -461,6 +461,13 @@ def _merge_operations(state: dict, key: str, record: dict) -> dict:
     return operations
 
 
+def _current_hold_record(state: dict) -> dict | None:
+    record = state.get("hold_record")
+    if record and record.get("reason") == state.get("last_reason_code"):
+        return record
+    return None
+
+
 def _receipt_from_payload(payload: Any, attempt: Attempt) -> WorkerReceipt:
     if not isinstance(payload, dict):
         raise OrchestrationError("protocol_error", "resume payload must be an object")
@@ -486,6 +493,50 @@ def _worker_receipt(receipt: dict, attempt: Attempt | None = None) -> WorkerRece
         detail=receipt.get("detail", ""),
         decision=receipt.get("decision"),
     )
+
+
+def _journal_worker_receipt(record: dict, state: dict, key: str) -> WorkerReceipt:
+    """Validate-only reconstruction from a bound ENGINE journal, never a file."""
+    from .decisions import _canonical_decision, invalid_decision
+
+    try:
+        payload = json.loads(record["receipt_json"])
+    except (KeyError, TypeError, ValueError):
+        raise invalid_decision() from None
+    if not isinstance(payload, dict):
+        raise invalid_decision()
+    if payload.get("decision") is None and payload.get("outcome") != "needs_decision":
+        return _worker_receipt(payload)
+    expected_digest = digest_parts(
+        "implementation/v1",
+        state["immutable_base_sha"],
+        state["spec_digest"],
+        state["workspace_path"],
+        record.get("repair_index"),
+    )
+    if (
+        record.get("operation_key") != key
+        or record.get("thread_id") != state["run_id"]
+        or record.get("kind") != "worker"
+        or record.get("stage") != "request_implementation"
+        or record.get("input_digest") != expected_digest
+        or key
+        != stable_key(
+            run_id=state["run_id"],
+            stage="request_implementation",
+            repair_index=record["repair_index"],
+            input_digest=expected_digest,
+        )
+    ):
+        raise invalid_decision()
+    try:
+        if payload.get("operation_key") != key:
+            raise invalid_decision()
+        if payload.get("decision") is not None:
+            payload["decision"] = _canonical_decision(payload["decision"])
+        return _worker_receipt(payload)
+    except (KeyError, TypeError, ValueError):
+        raise invalid_decision() from None
 
 
 def _review_from_payload(payload: Any, attempt: Attempt) -> ReviewResult:
@@ -599,7 +650,8 @@ def build_graph(deps: Deps, checkpointer=None):
                 # failing stage before the wrapper replaces it with its name.
                 updates.setdefault(
                     "hold_record",
-                    state.get("hold_record") or hold_record({**state, **updates}),
+                    _current_hold_record({**state, **updates})
+                    or hold_record({**state, **updates}),
                 )
             updates.setdefault("route", "continue")
             updates["stage"] = name
@@ -698,9 +750,22 @@ def build_graph(deps: Deps, checkpointer=None):
         if resolution.action == "hold":
             raise OrchestrationError("effect_unknown", resolution.detail)
         if resolution.action in {"adopt", "replay"}:
-            receipt = (
-                _worker_receipt(resolution.receipt) if resolution.receipt else None
-            )
+            receipt = None
+            if resolution.receipt:
+                if resolution.action == "replay":
+                    receipt = _journal_worker_receipt(record, state, key)
+                else:
+                    receipt = probe.worker_receipt or _worker_receipt(
+                        resolution.receipt
+                    )
+            if receipt is not None and receipt.operation_key != key:
+                raise OrchestrationError(
+                    "protocol_error", "receipt operation key does not match the request"
+                )
+            if receipt is not None and receipt.attempt.run_id != _attempt(state).run_id:
+                raise OrchestrationError(
+                    "stale_attempt", "receipt from a superseded attempt"
+                )
             if receipt is None:
                 # A request exists but has no receipt yet: attach to the existing
                 # work and wait. Never submit a second request for the same key.
@@ -763,9 +828,17 @@ def build_graph(deps: Deps, checkpointer=None):
         persisted = journal.get("receipt_json")
         if isinstance(persisted, str):
             persisted = json.loads(persisted)
+        if persisted and persisted.get("kind") == "worker_protocol_error":
+            from .decisions import invalid_decision
+
+            raise invalid_decision()
         receipt = (
-            _worker_receipt(persisted)
-            if journal.get("state") == "confirmed" and persisted
+            _journal_worker_receipt(journal, state, key)
+            if persisted
+            and (
+                journal.get("state") == "confirmed"
+                or persisted.get("outcome") == "needs_decision"
+            )
             else deps.worker.poll(external)
         )
         if receipt is None:
@@ -776,7 +849,31 @@ def build_graph(deps: Deps, checkpointer=None):
                     "attempt": attempt.as_dict(),
                 }
             )
-            receipt = _receipt_from_payload(payload, attempt)
+            if (
+                isinstance(payload, dict)
+                and payload.get("kind") == "worker_protocol_error"
+            ):
+                from .decisions import invalid_decision
+
+                raise invalid_decision()
+            if (
+                isinstance(payload, dict)
+                and payload.get("kind") == "worker_stale_attempt"
+            ):
+                raise OrchestrationError(
+                    "stale_attempt", "receipt from a superseded attempt"
+                )
+            if isinstance(payload, dict) and "worker_journal_key" in payload:
+                if payload["worker_journal_key"] != key:
+                    raise OrchestrationError(
+                        "protocol_error",
+                        "receipt operation key does not match the request",
+                    )
+                receipt = _journal_worker_receipt(
+                    deps.store.operation(key) or {}, state, key
+                )
+            else:
+                receipt = _receipt_from_payload(payload, attempt)
         if receipt.operation_key != key:
             raise OrchestrationError(
                 "protocol_error", "receipt operation key does not match the request"
@@ -798,8 +895,6 @@ def build_graph(deps: Deps, checkpointer=None):
             "worker_session_id": receipt.session_id,
         }
         if receipt.outcome == "needs_decision":
-            from .decisions import sanitize_decision
-
             return {
                 **updates,
                 "route": "hold_operator",
@@ -810,7 +905,7 @@ def build_graph(deps: Deps, checkpointer=None):
                     "stage": "await_worker",
                     "reason": "decision_required",
                     "detail": "worker requires a decision",
-                    **sanitize_decision(receipt.decision),
+                    **receipt.decision.as_dict(),
                 },
             }
         if receipt.outcome == "completed":
@@ -1337,7 +1432,7 @@ def build_graph(deps: Deps, checkpointer=None):
                 }[node]
             )
             deps.store.set_status(state["run_id"], "held")
-            record = state.get("hold_record") or hold_record(state, node=node)
+            record = _current_hold_record(state) or hold_record(state, node=node)
             deps.store.event(
                 state["run_id"],
                 "held",
@@ -1574,9 +1669,7 @@ def _receipt_payload(receipt: WorkerReceipt) -> dict:
         "detail": receipt.detail,
     }
     if receipt.decision is not None:
-        from .decisions import sanitize_decision
-
-        payload["decision"] = sanitize_decision(receipt.decision)
+        payload["decision"] = receipt.decision.as_dict()
     return payload
 
 

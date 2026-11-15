@@ -26,6 +26,13 @@ from .state import WorkerReceipt
 EFFECT_STATES = ("present", "absent", "unknown")
 
 
+@dataclass(frozen=True)
+class _WorkerResume:
+    """Private in-process transport; JSON cannot assert this provenance."""
+
+    receipt: WorkerReceipt
+
+
 def digest_parts(*parts: object) -> str:
     payload = "\x1f".join("" if part is None else str(part) for part in parts)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -43,6 +50,7 @@ class EffectProbe:
     request_id: str = ""
     receipt: dict | None = None
     detail: str = ""
+    worker_receipt: WorkerReceipt | None = None
 
     def __post_init__(self) -> None:
         if self.state not in EFFECT_STATES:

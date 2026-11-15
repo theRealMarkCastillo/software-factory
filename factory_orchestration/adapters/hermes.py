@@ -528,7 +528,7 @@ class HermesWorker:
         if process is None:
             probe = self.probe(handle.operation_key)
             if probe.receipt is not None:
-                return self._receipt_from(
+                return probe.worker_receipt or self._receipt_from(
                     handle.operation_key, probe.receipt, session_id=""
                 )
             return None
@@ -683,6 +683,7 @@ class HermesWorker:
             return EffectProbe(
                 "present",
                 receipt=receipt.as_dict(),
+                worker_receipt=receipt,
             )
         record = self._record(operation_key)
         if not record:
@@ -704,7 +705,7 @@ class HermesWorker:
             exit_code=event["exit_code"],
             session_id=event["session_id"],
         )
-        return EffectProbe("present", receipt=receipt.as_dict())
+        return EffectProbe("present", receipt=receipt.as_dict(), worker_receipt=receipt)
 
     def _terminal_receipt(
         self, key: str, record: dict, event: dict

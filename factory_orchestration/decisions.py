@@ -53,6 +53,40 @@ def worker_payload(text: str) -> object:
     Parsing to a dict alone erases excessive internal whitespace. Scan the
     syntax-checked root members to measure the actual serialized value.
     """
+    # Decode root members without overwriting duplicate keys. Seeing a decision
+    # key claims the protocol even if its value is malformed or overwritten.
+    decoder = json.JSONDecoder()
+    index = len(text) - len(text.lstrip())
+    claimed = False
+    try:
+        if text[index] == "{":
+            index += 1
+            while True:
+                index = len(text) - len(text[index:].lstrip())
+                key, index = decoder.raw_decode(text, index)
+                index = len(text) - len(text[index:].lstrip())
+                if text[index] != ":":
+                    break
+                index += 1
+                if key == "decision":
+                    claimed = True
+                    break
+                index = len(text) - len(text[index:].lstrip())
+                value, index = decoder.raw_decode(text, index)
+                if key == "outcome" and value == "needs_decision":
+                    claimed = True
+                    break
+                index = len(text) - len(text[index:].lstrip())
+                if text[index] != ",":
+                    break
+                index += 1
+    except (ValueError, IndexError, RecursionError):
+        pass
+    if not claimed:
+        try:
+            return json.loads(text)
+        except (ValueError, TypeError, RecursionError):
+            return None
     payload = strict_json(text)
     if not isinstance(payload, dict) or payload.get("decision") is None:
         return payload
@@ -93,16 +127,16 @@ def _text(value: str, limit: int, *, required: bool = False) -> str:
     return text
 
 
-def sanitize_decision(value: object) -> dict:
-    """Refuse invalid/oversized originals; return a detached sanitized projection."""
+def _validate_decision(value: object, *, raw: bool) -> None:
+    """Validate originals, or validate-only at the bound canonical journal edge."""
     try:
-        raw = json.dumps(
+        encoded = json.dumps(
             value, ensure_ascii=False, allow_nan=False, separators=(",", ":")
         ).encode("utf-8")
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise invalid_decision() from None
     if (
-        len(raw) > MAX_DECISION_BYTES
+        len(encoded) > MAX_DECISION_BYTES
         or not isinstance(value, dict)
         or set(value) != _KEYS
     ):
@@ -131,10 +165,15 @@ def sanitize_decision(value: object) -> dict:
     if recommendation and recommendation not in ids:
         raise invalid_decision()
     # Control symbols cannot change identity under diagnostic redaction.
-    if any(
+    if raw and any(
         redact_diagnostic(identity) != identity for identity in [*ids, recommendation]
     ):
         raise invalid_decision()
+
+
+def sanitize_decision(value: object) -> dict:
+    """Always treat public inline JSON as raw, even marker-looking text."""
+    _validate_decision(value, raw=True)
     return {
         "spec_ref": _text(value["spec_ref"], 1024),
         "spec_excerpt": _text(value["spec_excerpt"], 1024),
@@ -145,9 +184,9 @@ def sanitize_decision(value: object) -> dict:
                 "label": _text(o["label"], 256, required=True),
                 "consequence": _text(o["consequence"], 512, required=True),
             }
-            for o in options
+            for o in value["options"]
         ],
-        "recommendation": recommendation,
+        "recommendation": value["recommendation"],
         "answer_format": _text(value["answer_format"], 256, required=True),
     }
 
@@ -164,7 +203,60 @@ def terminal_decision(text: str) -> dict | None:
             raise invalid_decision()
     except UnicodeError:
         raise invalid_decision() from None
-    return sanitize_decision(strict_json(raw))
+    return owned_decision(strict_json(raw))
+
+
+class _FrozenDict(dict):
+    def _immutable(self, *args, **kwargs):
+        raise TypeError("immutable engine decision")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = _immutable
+    __ior__ = _immutable
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+class _FrozenList(list):
+    def _immutable(self, *args, **kwargs):
+        raise TypeError("immutable engine decision")
+
+    __setitem__ = __delitem__ = append = clear = extend = insert = pop = remove = (
+        _immutable
+    )
+    reverse = sort = __iadd__ = __imul__ = _immutable
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+class SanitizedDecision(_FrozenDict):
+    """In-process provenance, never conferred by JSON shape, flag or marker."""
+
+    def __init__(self, value):
+        super().__init__(
+            {
+                **value,
+                "options": _FrozenList(
+                    _FrozenDict(option) for option in value["options"]
+                ),
+            }
+        )
+
+    def as_dict(self) -> dict:
+        return json.loads(json.dumps(self, ensure_ascii=False))
+
+
+def owned_decision(value: object) -> SanitizedDecision:
+    if isinstance(value, SanitizedDecision):
+        return value
+    return SanitizedDecision(sanitize_decision(value))
+
+
+def _canonical_decision(value: object) -> SanitizedDecision:
+    # PRIVATE: only bound engine-owned operation journals may call this.
+    _validate_decision(value, raw=False)
+    return SanitizedDecision(value)
 
 
 WORKER_DECISION_PROTOCOL = """

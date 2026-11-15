@@ -52,9 +52,15 @@ def test_review_refuses_repository_spec_outside_workspace(tmp_path, monkeypatch)
         seeded["assignment"], spec_reference=str(seeded["repo"] / "card-spec.md")
     )
     requests = _capture(seeded, monkeypatch)
-    result = _drive(seeded)
-    assert result.status == "held", result.state
-    assert result.state["last_reason_code"] == "invalid_assignment"
+    from factory_orch_fixtures import request_count
+
+    from factory_orchestration.errors import OrchestrationError
+
+    with pytest.raises(OrchestrationError) as exc:
+        _drive(seeded)
+    assert exc.value.reason == "invalid_assignment"
+    assert request_count(seeded["worker"]) == 0
+    assert seeded["gate"].submissions == []
     assert requests == []
 
 

@@ -84,7 +84,7 @@ class InstalledLauncherGate:
             "--json",
         ]
         for path in frozen_paths:
-            argv.extend(("--frozen", path))
+            argv.append(f"--frozen={path}")
         try:
             completed = subprocess.run(
                 argv,

@@ -111,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(f"factory-verify: error: {exc}", file=sys.stderr)
         return 2
-    result = verify_evidence(args.artifacts_dir, args.repo, args.candidate, args.base)
+    result = None
     if paths:
         try:
             violations = offending_paths(args.repo, args.base, args.candidate, paths)
@@ -121,16 +121,26 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             if violations:
-                result.ok = False
-                result.reason = "frozen_path_modified"
-                result.detail = violation_detail(violations)
-                result.checks.append(
-                    {
-                        "name": "frozen_paths",
-                        "ok": False,
-                        "reason": "frozen_path_modified",
-                    }
+                # Reject at the frozen boundary before legacy evidence decoding:
+                # Git names are arbitrary bytes, not necessarily UTF-8 text.
+                result = VerificationResult(
+                    False,
+                    "frozen_path_modified",
+                    violation_detail(violations),
+                    args.candidate,
+                    args.base,
+                    checks=[
+                        {
+                            "name": "frozen_paths",
+                            "ok": False,
+                            "reason": "frozen_path_modified",
+                        }
+                    ],
                 )
+    if result is None:
+        result = verify_evidence(
+            args.artifacts_dir, args.repo, args.candidate, args.base
+        )
     if result.reason == "invalid_argument":
         print(f"factory-verify: error: {result.detail}", file=sys.stderr)
         return 2

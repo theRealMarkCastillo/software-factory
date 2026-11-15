@@ -62,6 +62,34 @@ Out of scope: unlisted influencing files (for example a new root `conftest.py`,
 an unlisted Compose override, or `.gitattributes` filters) and OS-level workspace
 write protection. The spec author owns the complete declaration.
 
+## Structured engine holds
+
+Every held checkpoint has an optional v1 `hold_record` with exactly `stage`,
+`reason`, `detail`, `spec_ref`, `spec_excerpt`, `question`, `options`,
+`recommendation`, and `answer_format`. The source is `repair_context.source`
+when nonempty, otherwise the pre-hold stage; reason/detail are the existing
+diagnostics (with the existing hold-route reason fallback). `spec_ref` is a
+diagnostic copy of `spec_reference`, not a new assignment binding.
+
+All textual record fields pass through `redact_diagnostic` before UTF-8 prefix
+bounding: detail 4096 bytes, spec reference/excerpt 1024 bytes, stage/reason 128
+bytes. Prefixes end on valid UTF-8 boundaries. Question, recommendation and
+answer format are empty strings; options is an empty list. The engine neither
+reads spec content for an excerpt nor invents a decision. Worker decision
+receipt parsing is not implemented by this foundation.
+
+The node wrapper captures the record when `classify` first sets `status=held`,
+before changing the stage name. Each of the four hold nodes retains that record
+and adds it to the existing `held` event alongside node/reason. Cancellation
+reconciliation creates the same record explicitly and emits a `held` event when
+effects remain unknown. Routing, reason codes, repair counts and approval
+bindings do not change. No store schema or state-version migration is required.
+
+This diagnostic projection does not rewrite immutable assignment references,
+prior repair context, original artifacts, or existing output fields. Those
+existing sinks retain their existing contracts; redaction here is not permission
+to put credentials into a spec path or assignment.
+
 ## State schema
 
 `factory_orchestration/state.py` defines `FactoryRunState` (`FactoryRun v1`,

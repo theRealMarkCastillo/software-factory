@@ -15,6 +15,7 @@ from pathlib import Path
 
 from .errors import OrchestrationError
 from .graph import Deps, build_graph, thread_id
+from .holds import hold_record
 from .state import (
     GRAPH_VERSION,
     STATE_SCHEMA_VERSION,
@@ -448,6 +449,9 @@ def inspect_run(deps: Deps, thread: str) -> dict:
         raise OrchestrationError("invalid_assignment", f"no checkpoint for {thread}")
     view = deps.store.inspect_view(thread, state)
     view["next_action"] = next_action(state, view)
+    if state.get("status") == "held":
+        # Legacy checkpoints remain readable without migration or writes.
+        view["hold_record"] = state.get("hold_record") or hold_record(state)
     return view
 
 

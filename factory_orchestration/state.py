@@ -313,6 +313,7 @@ class FactoryRunState(TypedDict, total=False):
     reviewer_result: dict
     repair_count: int
     repair_context: dict
+    hold_record: dict
     previous_failed_tree: str
     previous_failure_signature: str
     max_repairs: int

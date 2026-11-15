@@ -33,6 +33,7 @@ from typing import Any, Callable
 from factory.frozen import offending_paths, violation_detail
 
 from .errors import OrchestrationError
+from .holds import hold_record
 from .operations import digest_parts, resolve, stable_key
 from .redaction import redact_diagnostic
 from .state import (
@@ -586,6 +587,10 @@ def build_graph(deps: Deps, checkpointer=None):
                     "stage": name,
                     **failure,
                 }
+            if updates.get("status") == "held":
+                # Classify marks intermediate checkpoints held: capture the
+                # failing stage before the wrapper replaces it with its name.
+                updates.setdefault("hold_record", hold_record({**state, **updates}))
             updates.setdefault("route", "continue")
             updates["stage"] = name
             updates["stage_sequence"] = int(state.get("stage_sequence", 0)) + 1
@@ -1293,10 +1298,11 @@ def build_graph(deps: Deps, checkpointer=None):
                 }[node]
             )
             deps.store.set_status(state["run_id"], "held")
+            record = state.get("hold_record") or hold_record(state, node=node)
             deps.store.event(
                 state["run_id"],
                 "held",
-                {"node": node, "reason": reason},
+                {"node": node, "reason": reason, "hold_record": record},
             )
             return {
                 "stage": node,
@@ -1304,6 +1310,7 @@ def build_graph(deps: Deps, checkpointer=None):
                 "status": "held",
                 "route": "end",
                 "last_reason_code": reason,
+                "hold_record": record,
             }
 
         return held
@@ -1364,6 +1371,22 @@ def build_graph(deps: Deps, checkpointer=None):
         if unknown:
             deps.store.set_status(thread, "held")
             deps.store.event(thread, "cancellation_pending", {"operations": unknown})
+            record = hold_record(
+                {
+                    **state,
+                    "last_reason_code": "cancellation_pending",
+                    "last_reason_detail": ", ".join(unknown),
+                }
+            )
+            deps.store.event(
+                thread,
+                "held",
+                {
+                    "node": "reconcile",
+                    "reason": "cancellation_pending",
+                    "hold_record": record,
+                },
+            )
             return {
                 "stage": "reconcile",
                 "stage_sequence": int(state.get("stage_sequence", 0)) + 1,
@@ -1371,6 +1394,7 @@ def build_graph(deps: Deps, checkpointer=None):
                 "route": "end",
                 "last_reason_code": "cancellation_pending",
                 "last_reason_detail": ", ".join(unknown),
+                "hold_record": record,
             }
         deps.store.set_status(thread, "cancelled")
         deps.store.event(thread, "cancelled", {})

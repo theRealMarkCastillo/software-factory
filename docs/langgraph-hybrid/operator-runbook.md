@@ -30,6 +30,22 @@ git diff --check
 Offline by construction: `tests/conftest.py` blocks Docker and network
 subprocesses. Tests that need the installed launcher skip when it is absent.
 
+## Inspecting structured engine holds
+
+For held runs only, `inspect` includes top-level `hold_record`, identical to the
+sanitized record in the checkpoint and `held` event. `export` naturally includes
+the checkpoint's optional record in `state`; there is no new command or flag.
+For pre-change held checkpoints without a record, inspection synthesizes it
+read-only using the same deterministic projection, with no event or DB update.
+Non-held inspection and `next_action` retain their existing output.
+
+The record's stage identifies the failing repair source when available, otherwise
+the pre-hold graph stage. Read reason/detail for the existing diagnosis. Empty
+question/options are intentional: this foundation cannot infer a human decision,
+read an excerpt from the spec, or parse a worker decision block. Resolve holds
+using the existing operator procedures; the record changes no authorization,
+repair budget, or candidate approval binding.
+
 ## Enrolment (explicit, per host)
 
 ```sh

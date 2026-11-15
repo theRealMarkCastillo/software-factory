@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from factory_orch_fixtures import commit, git, seed
 
+from factory_orchestration.decisions import WORKER_DECISION_PROTOCOL
 from factory_orchestration.graph import _implementation_prompt, thread_id
 from factory_orchestration.runner import drive, resume
 from factory_orchestration.state import GateOutcome, VerifyOutcome
@@ -88,7 +89,7 @@ def receipt(s, kind, repair_index=0):
 def test_repair_zero_is_byte_identical():
     assert (
         _implementation_prompt({**PROMPT_STATE, "repair_context": {"detail": "bad"}}, 0)
-        == GOLDEN
+        == GOLDEN + WORKER_DECISION_PROTOCOL
     )
 
 

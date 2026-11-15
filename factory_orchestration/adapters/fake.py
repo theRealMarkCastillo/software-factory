@@ -96,6 +96,7 @@ class FakeWorker:
     crash: CrashPlan | None = None
     opaque: bool = False
     submitted: list[str] = field(default_factory=list)
+    decision: dict | None = None
 
     # -- paths --------------------------------------------------------------
     def _request_path(self, key: str) -> Path:
@@ -134,6 +135,7 @@ class FakeWorker:
                 attempt=request.attempt,
                 session_id=f"fake-session-{len(self.submitted)}",
                 outcome=outcome,
+                decision=self.decision,
                 candidate_sha=self.candidate_sha if outcome == "completed" else None,
                 artifact_references=(),
                 reported_tests=("pytest -q",),
@@ -166,6 +168,7 @@ class FakeWorker:
             artifact_references=tuple(payload.get("artifact_references") or ()),
             reported_tests=tuple(payload.get("reported_tests") or ()),
             detail=payload.get("detail", ""),
+            decision=payload.get("decision"),
         )
 
     def probe(self, operation_key: str) -> EffectProbe:

@@ -53,6 +53,14 @@ unpinned `requirements.txt`, fails closed with an actionable reason until you
 commit a deterministic input. When an environment is audited beside a
 `uv.lock`, installed versions must match the lock (`uv sync --frozen`).
 
+For every Node project the gate runs `npm audit --json --audit-level moderate
+--omit=dev` (npm 7+ with audit report v2 required), recording `npm_scope:
+production` and the exact argv in evidence; unsupported reports fail closed
+with an upgrade instruction. Dev/build tooling is not vulnerability-gated:
+deployed images must not execute dev-only packages (for example, a Vite dev
+server must not serve production). Reviewers must check that deployment matches
+this scope. Python auditing is unchanged.
+
 ```sh
 uv run --locked factory-run \
   --card task-123 \

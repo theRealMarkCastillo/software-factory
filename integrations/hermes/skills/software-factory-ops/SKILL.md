@@ -35,6 +35,8 @@ Coverage runs on the host before Compose; service-dependent coverage may remain
 unavailable. Disabled gates and unavailable audits produce diagnostic evidence,
 not an acceptance pass. Record limitations explicitly.
 
+The npm gate audits production dependencies only (`--omit=dev`, npm 7+ required; evidence records `npm_scope: production` and exact argv), not dev/build tooling, so reviewers must check that deployed images never execute dev-only packages (for example a Vite dev server); Python auditing is unchanged.
+
 A protected-state change requires operator review. Do not auto-retry or attempt
 to repair unrelated workloads. A failed snapshot makes safety verification
 INCONCLUSIVE. Consult the repository quickstart for current CLI limitations.

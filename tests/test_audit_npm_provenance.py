@@ -1,10 +1,10 @@
 """Additive npm provenance without changing existing merge verdicts or fields."""
 
 import json
-from pathlib import Path
 import subprocess
 import sys
 import types
+from pathlib import Path
 
 import pytest
 

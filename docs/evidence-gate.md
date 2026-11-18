@@ -117,6 +117,17 @@ and the verifier. A gate is accepted only when it matches the required fields;
 any other skip needs a documented inapplicable reason plus substantiation.
 Nothing in a manifest can add, relax, or reclassify a gate.
 
+The npm audit gate covers production dependencies only, using `npm audit --json
+--audit-level moderate --omit=dev`; its result records `npm_scope: production`
+and the exact `command` argv, including in runner evidence. npm 7+ with audit
+report v2 is required; older/unsupported reports fail closed with an upgrade
+instruction. Dev/build tooling is not vulnerability-gated, so reviewers must
+verify deployed images do not execute dev-only packages (such as a Vite dev
+server as the production server). Python auditing is unchanged. npm's reported
+dependency count remains the report's total inventory, which can include dev
+packages even though vulnerability findings omit them; it is not a count of
+production-only packages.
+
 ## Legacy evidence and the old checker
 
 `assert_assembled_evidence` remains importable with its historical v1 semantics

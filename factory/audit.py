@@ -115,9 +115,10 @@ class AuditResult:
     source: str = ""
     lock_sha256: str = ""
     report_sha256: str = ""
+    scans: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "status": self.status,
             "language": self.language,
             "findings": self.findings or [],
@@ -134,6 +135,9 @@ class AuditResult:
                 VULNERABILITY_SERVICE if self.tool == "pip-audit" else ""
             ),
         }
+        if len(self.scans) >= 2:
+            result["scans"] = self.scans
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -802,6 +806,24 @@ def _merge_scans(results: list[AuditResult], language: str) -> AuditResult:
     """Worst status wins; audited counts and skips are summed."""
     if not results:
         return AuditResult(STATUS_INVALID, language, detail="no scan produced a result")
+    if len(results) >= 2:
+        # Snapshot individual provenance before the legacy merge mutates counts
+        # and details. Attach to every candidate so all verdict branches retain it.
+        scans = []
+        for result in results:
+            entry = {
+                "language": result.language,
+                "tool": result.tool,
+                "source": result.source,
+                "status": result.status,
+                "audited": result.audited,
+                "command": list(result.command or []),
+            }
+            if npm_scope := getattr(result, "npm_scope", ""):
+                entry["npm_scope"] = npm_scope
+            scans.append(entry)
+        for result in results:
+            result.scans = scans
     for wanted in (STATUS_FAIL, STATUS_INVALID, STATUS_UNSUPPORTED):
         hits = [result for result in results if result.status == wanted]
         if not hits:
@@ -1116,8 +1138,16 @@ def _run_pip_audit(repo: Path, manifest: Path) -> AuditResult:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class NpmAuditResult(AuditResult):
+    npm_scope: str = "production"
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "npm_scope": self.npm_scope}
+
+
 def _run_npm_audit(repo: Path) -> AuditResult:
-    cmd = ["npm", "audit", "--json", "--audit-level", "moderate"]
+    cmd = ["npm", "audit", "--json", "--audit-level", "moderate", "--omit=dev"]
     try:
         proc = subprocess.run(
             cmd,
@@ -1128,7 +1158,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return AuditResult(
+        return NpmAuditResult(
             STATUS_INVALID,
             "typescript",
             detail="npm audit timed out (registry unreachable)",
@@ -1138,7 +1168,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
         )
     except OSError as exc:
         # npm not installed on this host -- report, never raise.
-        return AuditResult(
+        return NpmAuditResult(
             STATUS_INVALID,
             "typescript",
             detail=f"could not execute npm: {exc}",
@@ -1150,12 +1180,27 @@ def _run_npm_audit(repo: Path) -> AuditResult:
     try:
         data = json.loads(proc.stdout or "{}")
         if proc.returncode not in (0, 1):
-            return AuditResult(
+            return NpmAuditResult(
                 STATUS_INVALID,
                 "typescript",
                 detail=(
                     f"npm audit exited {proc.returncode}: "
-                    f"{(proc.stderr or '').strip()[:400]}"
+                    f"{(proc.stderr or '').strip()[:400]}; "
+                    "install npm 7+ supporting --omit=dev and retry"
+                ),
+                tool="npm audit",
+                command=list(cmd),
+                source="package-lock",
+            )
+        # npm 6 may silently ignore --omit; npm 7+ supports omission and
+        # emits report v2. Refuse older reports rather than audit all deps.
+        if data.get("auditReportVersion") != 2:
+            return NpmAuditResult(
+                STATUS_INVALID,
+                "typescript",
+                detail=(
+                    "cannot verify --omit=dev support: install npm 7+ "
+                    "with audit report v2 and rerun the production audit"
                 ),
                 tool="npm audit",
                 command=list(cmd),
@@ -1163,7 +1208,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             )
         meta = data.get("metadata", {}) or {}
         if "error" in data or "vulnerabilities" not in meta:
-            return AuditResult(
+            return NpmAuditResult(
                 STATUS_INVALID,
                 "typescript",
                 detail="npm audit returned no vulnerability metadata",
@@ -1177,7 +1222,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
         if isinstance(dependencies, dict):
             dependencies = dependencies.get("total")
         if type(dependencies) is not int or dependencies < 0:
-            return AuditResult(
+            return NpmAuditResult(
                 STATUS_INVALID,
                 "typescript",
                 detail=(
@@ -1188,7 +1233,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
                 command=list(cmd),
                 source="package-lock",
             )
-        result = AuditResult(
+        result = NpmAuditResult(
             STATUS_PASS,
             "typescript",
             tool="npm audit",
@@ -1209,7 +1254,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
         result.detail = f"no vulnerabilities across {dependencies} audited dependencies"
         return result
     except (ValueError, TypeError):
-        return AuditResult(
+        return NpmAuditResult(
             STATUS_INVALID,
             "typescript",
             detail="npm audit returned unparseable output",

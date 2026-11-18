@@ -1177,21 +1177,24 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             source="package-lock",
         )
 
+    # Tool failures may emit plain text or no stdout, not a JSON report.
+    # Preserve their bounded diagnostic and remedy before decoding stdout.
+    if proc.returncode not in (0, 1):
+        return NpmAuditResult(
+            STATUS_INVALID,
+            "typescript",
+            detail=(
+                f"npm audit exited {proc.returncode}: "
+                f"{(proc.stderr or '').strip()[:400]}; "
+                "install npm 7+ supporting --omit=dev and retry"
+            ),
+            tool="npm audit",
+            command=list(cmd),
+            source="package-lock",
+        )
+
     try:
         data = json.loads(proc.stdout or "{}")
-        if proc.returncode not in (0, 1):
-            return NpmAuditResult(
-                STATUS_INVALID,
-                "typescript",
-                detail=(
-                    f"npm audit exited {proc.returncode}: "
-                    f"{(proc.stderr or '').strip()[:400]}; "
-                    "install npm 7+ supporting --omit=dev and retry"
-                ),
-                tool="npm audit",
-                command=list(cmd),
-                source="package-lock",
-            )
         # npm 6 may silently ignore --omit; npm 7+ supports omission and
         # emits report v2. Refuse older reports rather than audit all deps.
         if data.get("auditReportVersion") != 2:

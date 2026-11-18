@@ -18,11 +18,11 @@ def fake_npm(tmp_path, monkeypatch):
     (repo / "package-lock.json").write_text("{}\n")
     monkeypatch.setenv("PATH", str(bin_dir))
 
-    def install(report, stderr="", returncode=0):
+    def install(report=None, stderr="", returncode=0, raw=None):
         npm.write_text(
             f"#!{sys.executable}\n"
             "import sys\n"
-            f"print({json.dumps(report)!r})\n"
+            f"sys.stdout.write({(json.dumps(report) if raw is None else raw)!r})\n"
             f"print({stderr!r}, file=sys.stderr)\n"
             f"sys.exit({returncode})\n"
         )
@@ -82,6 +82,57 @@ def test_npm_without_omit_support_fails_closed(fake_npm, capsys, reject_option):
     assert result.to_dict()["npm_scope"] == "production"
     assert audit.main(["--repo", str(repo)]) == 1
     assert json.loads(capsys.readouterr().out)["passed"] is False
+
+
+@pytest.mark.parametrize("raw", ["", "\n \t", "not JSON"])
+def test_plain_rejection_preserves_actionable_evidence(
+    fake_npm, capsys, monkeypatch, tmp_path, raw
+):
+    from factory import runner
+
+    diagnostic = "unknown option --omit=dev " + "x" * 1000
+    repo = fake_npm(raw=raw, stderr=diagnostic, returncode=2)
+    result = audit.run_dependency_audit(str(repo))
+    assert result.status == audit.STATUS_INVALID
+    assert "npm 7+" in result.detail
+    assert "supporting --omit=dev" in result.detail
+    assert diagnostic[:400] in result.detail
+    assert diagnostic[:401] not in result.detail
+    assert len(result.detail) < 500
+    assert result.npm_scope == "production"
+    assert result.command == [
+        "npm",
+        "audit",
+        "--json",
+        "--audit-level",
+        "moderate",
+        "--omit=dev",
+    ]
+    assert audit.main(["--repo", str(repo)]) == 1
+    cli = json.loads(capsys.readouterr().out)
+    assert cli["passed"] is False
+    assert cli["result"] == result.to_dict()
+
+    monkeypatch.setattr(runner, "_diff_has_added_python", lambda *args: False)
+    run_result = runner.RunResult(card_id="npm-rejection", project_name="npm-rejection")
+    assert runner._run_preflight_gates(repo, run_result, {"ref": "main"}) is False
+    evidence_path = tmp_path / "runner-evidence.json"
+    evidence_path.write_text(json.dumps(run_result.to_dict()))
+    stored = json.loads(evidence_path.read_text())["gates"]["audit"]
+    assert stored["status"] == audit.STATUS_INVALID
+    for key in ("detail", "command", "npm_scope"):
+        assert stored[key] == result.to_dict()[key]
+
+
+@pytest.mark.parametrize("raw", ["\n \t", "not JSON"])
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_ordinary_malformed_output_still_fails_closed(fake_npm, raw, returncode):
+    repo = fake_npm(raw=raw, returncode=returncode)
+    result = audit.run_dependency_audit(str(repo))
+    assert result.status == audit.STATUS_INVALID
+    assert result.detail == "npm audit returned unparseable output"
+    assert result.npm_scope == "production"
+    assert result.command[-1] == "--omit=dev"
 
 
 def test_mixed_project_preserves_npm_scope_in_evidence(fake_npm, monkeypatch):

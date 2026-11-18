@@ -31,7 +31,11 @@ def npm_report():
                 "effects": ["fdir", "tinyglobby", "vite"],
                 "range": "*",
                 "nodes": ["node_modules/picomatch"],
-                "fixAvailable": {"name": "vite", "version": "6.2.7", "isSemVerMajor": True},
+                "fixAvailable": {
+                    "name": "vite",
+                    "version": "6.2.7",
+                    "isSemVerMajor": True,
+                },
             }
         },
         "metadata": {

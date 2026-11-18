@@ -1173,7 +1173,21 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             )
         vulns = meta.get("vulnerabilities", {}) or {}
         total = int(vulns.get("total", 0))
-        dependencies = int(meta.get("dependencies", 0) or 0)
+        dependencies = meta.get("dependencies")
+        if isinstance(dependencies, dict):
+            dependencies = dependencies.get("total")
+        if type(dependencies) is not int or dependencies < 0:
+            return AuditResult(
+                STATUS_INVALID,
+                "typescript",
+                detail=(
+                    "npm audit dependency count must be a non-negative integer "
+                    "(metadata.dependencies or metadata.dependencies.total)"
+                ),
+                tool="npm audit",
+                command=list(cmd),
+                source="package-lock",
+            )
         result = AuditResult(
             STATUS_PASS,
             "typescript",
@@ -1187,6 +1201,10 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             result.status = STATUS_FAIL
             result.findings = [vulns]
             result.detail = f"{total} vulnerabilities (incl moderate+)"
+            return result
+        if dependencies == 0:
+            result.status = STATUS_INVALID
+            result.detail = "npm audit audited zero dependencies"
             return result
         result.detail = f"no vulnerabilities across {dependencies} audited dependencies"
         return result

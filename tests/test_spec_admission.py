@@ -11,8 +11,9 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
-from factory_orch_fixtures import git, make_deps, request_count, seed
+from factory_orch_fixtures import git, make_deps, refresh_sidecar, request_count, seed
 
+from factory.evidence import engine_identity
 from factory_orchestration.adapters.fake import (
     FakeBoard,
     FakeGate,
@@ -295,6 +296,15 @@ def test_checkpoint_created_by_actual_base_resumes_without_new_admission(tmp_pat
     )
     assert created.returncode == 0, created.stderr
     legacy = json.loads(created.stdout)
+    # The base engine stamped its own fingerprint on the seeded evidence; the
+    # current engine rightly refuses to certify another build's evidence. This
+    # test covers checkpoint/admission compatibility, so re-stamp the evidence
+    # with this engine instead of coupling the test to an unchanged factory/.
+    manifest = root / "artifacts" / "evidence-manifest.json"
+    payload = json.loads(manifest.read_text())
+    payload["engine"] = engine_identity()
+    manifest.write_text(json.dumps(payload))
+    refresh_sidecar(root / "artifacts")
     attempt = Attempt(task_id="t_abcd1234", run_id=7, profile="factory-runner")
     board = FakeBoard()
     board.set_current(attempt)

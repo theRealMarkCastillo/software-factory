@@ -24,10 +24,15 @@ already exists, is used as-is instead of being re-joined onto --repo.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import re
 import shutil
+import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,9 +55,12 @@ from factory.evidence import (
 from factory.policy import (
     PolicyViolation,
     ProtectedProjectSnapshot,
+    _acquire_port_lock,
+    allocate_host_ports,
     assert_safe_compose_file,
     assert_safe_repo_root,
     new_factory_project,
+    rewrite_deployment_ports,
     run_compose,
     teardown,
 )
@@ -256,7 +264,10 @@ def _resolve_input_path(
 
 
 def _load_compose_files(
-    compose_files: list[Path], repo_root: Path | None = None
+    compose_files: list[Path],
+    repo_root: Path | None = None,
+    *,
+    deployment: bool = False,
 ) -> dict:
     """Validate every input, then merge mappings for final policy validation.
 
@@ -291,6 +302,7 @@ def _load_compose_files(
             doc,
             repo_root=repo_root or compose_files[0].parent,
             require_services=False,
+            deployment=deployment,
         )
         merged = merge(merged, doc)
     return merged
@@ -300,7 +312,7 @@ def run_factory_card(
     card_id: str,
     repo_path: str,
     compose_files: list[str],
-    test_service: str = "test",
+    test_service: str | None = None,
     timeout: int = 900,
     artifacts_root: str = "~/.hermes/kanban/factory-artifacts",
     entry_point: str = "docker compose test service",
@@ -310,6 +322,9 @@ def run_factory_card(
     run_gates: bool = True,
     mode: str | None = None,
     base_ref: str | None = None,
+    deployment: bool = False,
+    check: str | None = None,
+    wait_timeout: int = 300,
 ) -> RunResult:
     """
     Full sanctioned lifecycle for a factory Compose job:
@@ -346,6 +361,13 @@ def run_factory_card(
     the CLI); a disabled-gate run is visibly second-class and records
     ``gates_run: false`` / ``mode: "diagnostic"``.
     """
+    if deployment and (not check or test_service is not None):
+        raise ValueError("deployment requires --check and forbids --test-service")
+    if deployment and (not run_gates or mode not in (None, "deployment")):
+        raise ValueError("deployment requires gates and deployment evidence mode")
+    if wait_timeout <= 0:
+        raise ValueError("wait timeout must be positive")
+    test_service = "test" if test_service is None else test_service
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}: {mode!r}")
     if mode == "acceptance" and not run_gates:
@@ -353,7 +375,13 @@ def run_factory_card(
             "explicit acceptance mode requires gates; --no-gates can only "
             "produce diagnostic evidence"
         )
-    resolved_mode = mode or ("acceptance" if run_gates else "diagnostic")
+    resolved_mode = (
+        "deployment"
+        if deployment
+        else mode or ("acceptance" if run_gates else "diagnostic")
+    )
+    if resolved_mode == "deployment" and not deployment:
+        raise ValueError("deployment evidence requires deployment execution")
 
     repo = Path(repo_path).expanduser().resolve()
     if not repo.is_dir():
@@ -361,6 +389,19 @@ def run_factory_card(
     # Reject a sensitive subject root before resolving any compose/env input or
     # touching Docker. This closes the repo_root=/etc reachability path.
     assert_safe_repo_root(repo)
+    check_path = None
+    if deployment:
+        assert check is not None
+        check_path = (repo / check).resolve()
+        if (
+            Path(check).is_absolute()
+            or not check_path.is_relative_to(repo)
+            or not check_path.is_file()
+            or not os.access(check_path, os.X_OK)
+        ):
+            raise PolicyViolation(
+                "--check must be a repo-relative executable inside the repo"
+            )
 
     result = RunResult(
         card_id=card_id, project_name="", mode=resolved_mode, gates_run=run_gates
@@ -372,9 +413,11 @@ def run_factory_card(
     resolved_compose = [
         _resolve_input_path(repo, f, "compose file") for f in compose_files
     ]
-    merged_compose = _load_compose_files(resolved_compose, repo_root=repo)
-    assert_safe_compose_file(merged_compose, repo_root=repo)
-    if test_service not in merged_compose.get("services", {}):
+    merged_compose = _load_compose_files(
+        resolved_compose, repo_root=repo, deployment=deployment
+    )
+    assert_safe_compose_file(merged_compose, repo_root=repo, deployment=deployment)
+    if not deployment and test_service not in merged_compose.get("services", {}):
         raise PolicyViolation(
             f"test_service '{test_service}' not found in compose services: "
             f"{list(merged_compose.get('services', {}).keys())}"
@@ -440,24 +483,119 @@ def run_factory_card(
         "ok": False,
         "detail": "teardown never ran",
     }
+    deployment_state = {}
+    terminal_stage = None
+    port_stack = ExitStack()
+    up_args = (
+        ["up", "-d", "--build", "--wait", "--wait-timeout", str(wait_timeout)]
+        if deployment
+        else [
+            "up",
+            "--build",
+            "--abort-on-container-exit",
+            "--exit-code-from",
+            test_service,
+        ]
+    )
 
     try:
+        if deployment:
+            assert yaml is not None and check_path is not None
+            port_stack.enter_context(_acquire_port_lock())
+            count = sum(
+                len(s.get("ports", []) or [])
+                for s in merged_compose["services"].values()
+            )
+            ports = rewrite_deployment_ports(
+                merged_compose, allocate_host_ports(count, lock_held=True)
+            )
+            assert_safe_compose_file(merged_compose, repo_root=repo, deployment=True)
+            resolved = artifacts_dir / "compose.resolved.yml"
+            resolved.write_text(yaml.safe_dump(merged_compose, sort_keys=False))
+            abs_compose_files = [str(resolved.resolve())]
+            deployment_state = {
+                "ports": ports,
+                "compose_sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+                "check": {
+                    "path": str(check_path.relative_to(repo)),
+                    "sha256": hashlib.sha256(check_path.read_bytes()).hexdigest(),
+                },
+                "wait": {"ok": False},
+                "check_outcome": {"ok": False},
+            }
         # 3/4. Build and run, treating the test service's exit code as authoritative.
         result.stage = "running"
         proc = run_compose(
             project_name,
             abs_compose_files,
-            [
-                "up",
-                "--build",
-                "--abort-on-container-exit",
-                "--exit-code-from",
-                test_service,
-            ],
+            up_args,
             timeout=timeout,
+            **(
+                {"project_directory": str(repo), "deployment": True}
+                if deployment
+                else {}
+            ),
         )
         result.exit_code = proc.returncode
         result.passed = proc.returncode == 0
+        if deployment:
+            deployment_state["wait"] = {
+                "ok": result.passed,
+                "exit_code": proc.returncode,
+            }
+            if not result.passed:
+                terminal_stage = "deployment_wait_failed"
+            else:
+                env = {
+                    key: os.environ[key]
+                    for key in ("PATH", "HOME", "TMPDIR", "LANG")
+                    if key in os.environ
+                }
+                env["FACTORY_HOST"] = "127.0.0.1"
+                for mapping in deployment_state["ports"]:
+                    service = re.sub(r"[^A-Z0-9]", "_", mapping["service"].upper())
+                    key = f"FACTORY_PORT_{service}_{mapping['target']}"
+                    if key in env:
+                        raise PolicyViolation(
+                            "deployment port environment key collision"
+                        )
+                    env[key] = str(mapping["published"])
+                try:
+                    check_proc = subprocess.run(
+                        [str(check_path)],
+                        cwd=repo,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout,
+                        check=False,
+                    )
+                    result.exit_code = check_proc.returncode
+                    result.passed = check_proc.returncode == 0
+                    deployment_state["check_outcome"] = {
+                        "ok": result.passed,
+                        "exit_code": check_proc.returncode,
+                    }
+                    (artifacts_dir / "check.stdout.log").write_text(
+                        check_proc.stdout or ""
+                    )
+                    (artifacts_dir / "check.stderr.log").write_text(
+                        check_proc.stderr or ""
+                    )
+                    if not result.passed:
+                        terminal_stage = "deployment_check_failed"
+                except subprocess.TimeoutExpired as exc:
+                    result.passed = False
+                    result.exit_code = 124
+                    result.error = str(exc)
+                    terminal_stage = "deployment_check_timeout"
+                    deployment_state["check_outcome"] = {"ok": False, "timeout": True}
+                    for name, value in (("stdout", exc.stdout), ("stderr", exc.stderr)):
+                        (artifacts_dir / f"check.{name}.log").write_text(
+                            value.decode(errors="replace")
+                            if isinstance(value, bytes)
+                            else value or ""
+                        )
 
         # 5. Collect logs regardless of outcome.
         result.stage = "collecting_logs"
@@ -465,7 +603,15 @@ def run_factory_card(
         (artifacts_dir / "up.stderr.log").write_text(proc.stderr or "")
 
         logs_proc = run_compose(
-            project_name, abs_compose_files, ["logs", "--no-color"], timeout=60
+            project_name,
+            abs_compose_files,
+            ["logs", "--no-color"],
+            timeout=60,
+            **(
+                {"project_directory": str(repo), "deployment": True}
+                if deployment
+                else {}
+            ),
         )
         (artifacts_dir / "compose.log").write_text(logs_proc.stdout or "")
 
@@ -474,6 +620,12 @@ def run_factory_card(
         result.error = str(exc)
         result.passed = False
         # Capture whatever partial output exists (e.g. TimeoutExpired carries
+        if deployment:
+            terminal_stage = (
+                "deployment_wait_timeout"
+                if isinstance(exc, subprocess.TimeoutExpired)
+                else "deployment_run_failed"
+            )
         # stdout/stderr) so a crashed/hung run still leaves evidence behind.
         partial_out = getattr(exc, "stdout", "") or ""
         partial_err = getattr(exc, "stderr", "") or ""
@@ -500,7 +652,15 @@ def run_factory_card(
             result.stage = "tearing_down"
         teardown_state["attempted"] = True
         try:
-            teardown_proc = teardown(project_name, abs_compose_files)
+            teardown_proc = teardown(
+                project_name,
+                abs_compose_files,
+                **(
+                    {"project_directory": str(repo), "deployment": True}
+                    if deployment
+                    else {}
+                ),
+            )
             if teardown_proc.returncode != 0:
                 warning = f"teardown failed with exit code {teardown_proc.returncode}"
                 teardown_state.update(
@@ -522,6 +682,11 @@ def run_factory_card(
             result.log.append(warning)
             result.error = result.error or warning
             result.passed = False
+
+        finally:
+            port_stack.close()
+        if deployment and not teardown_state["ok"]:
+            terminal_stage = "deployment_teardown_failed"
 
     # 7/8. Postflight safety verification -- this can override everything else.
     result.stage = "postflight_verification"
@@ -565,7 +730,9 @@ def run_factory_card(
         (artifacts_dir / "COLLATERAL_WARNING.txt").write_text(detail)
         return result
 
-    result.stage = "complete" if result.passed else "complete_with_errors"
+    result.stage = (
+        "complete" if result.passed else terminal_stage or "complete_with_errors"
+    )
     result.duration_s = time.time() - start
     # End-of-run source snapshot: proves the source did not move while the
     # gates measured it and Compose ran it. A change cannot certify.
@@ -587,15 +754,7 @@ def run_factory_card(
             artifacts_dir,
             repo,
             entry_point=entry_point,
-            command=[
-                "docker",
-                "compose",
-                "up",
-                "--build",
-                "--abort-on-container-exit",
-                "--exit-code-from",
-                test_service,
-            ],
+            command=["docker", "compose", *up_args],
             env_file=resolved_env_file,
             env_example=resolved_env_example,
             fixture_paths=fixture_paths or [],
@@ -607,10 +766,21 @@ def run_factory_card(
             source_start=source_start,
             source_end=source_end,
             base=base_info,
-            runtime={"teardown": teardown_state, "safety": safety},
+            runtime={
+                "teardown": teardown_state,
+                "safety": safety,
+                **({"deployment": deployment_state} if deployment else {}),
+            },
             # A passing run must carry all three logs; a failed run records
             # whichever logs exist so the failure stays diagnosable.
-            artifacts=list(REQUIRED_ARTIFACTS) if result.passed else None,
+            artifacts=list(REQUIRED_ARTIFACTS)
+            + (
+                ["compose.resolved.yml", "check.stdout.log", "check.stderr.log"]
+                if deployment
+                else []
+            )
+            if result.passed
+            else None,
             card_id=card_id,
             project_name=project_name,
             execution={
@@ -638,8 +808,12 @@ def run_factory_card(
     if not result.passed:
         return result
     try:
-        check = check_evidence(manifest, artifacts_dir=artifacts_dir)
-        failure = "" if check.ok else f"{check.reason}: {check.detail}"
+        evidence_check = check_evidence(manifest, artifacts_dir=artifacts_dir)
+        failure = (
+            ""
+            if evidence_check.ok
+            else f"{evidence_check.reason}: {evidence_check.detail}"
+        )
     except Exception as exc:  # noqa: BLE001 - a crashing checker fails closed
         failure = f"checker_error: {type(exc).__name__}: {exc}"
     if failure:
@@ -752,7 +926,16 @@ def main(argv: list[str] | None = None) -> int:
             "for the repo root); an absolute or cwd-relative path is also accepted."
         ),
     )
-    parser.add_argument("--test-service", default="test")
+    parser.add_argument("--test-service", default=None)
+    parser.add_argument(
+        "--deployment",
+        action="store_true",
+        help="Validate a real deployment using allocated loopback ports and a host check.",
+    )
+    parser.add_argument(
+        "--check", help="Repo-relative executable host check (trusted repository code)."
+    )
+    parser.add_argument("--wait-timeout", type=int, default=300)
     parser.add_argument("--entry-point", default="docker compose test service")
     parser.add_argument(
         "--env-file",
@@ -791,6 +974,14 @@ def main(argv: list[str] | None = None) -> int:
         "when --no-gates is given. Diagnostic evidence can never certify.",
     )
     args = parser.parse_args(argv)
+    if args.deployment and (not args.check or args.test_service is not None):
+        parser.error("--deployment requires --check and forbids --test-service")
+    if args.deployment and (args.no_gates or args.mode is not None):
+        parser.error("--deployment requires gates and selects its own evidence class")
+    if not args.deployment and (args.check or args.wait_timeout != 300):
+        parser.error("--check and --wait-timeout require --deployment")
+    if args.wait_timeout <= 0:
+        parser.error("--wait-timeout must be positive")
 
     # A run without gates cannot be acceptance evidence. Refuse the
     # contradiction as a usage error before any gate or Docker work.
@@ -816,6 +1007,9 @@ def main(argv: list[str] | None = None) -> int:
         mode=args.mode,
         artifacts_root=args.artifacts_root,
         base_ref=args.base,
+        deployment=args.deployment,
+        check=args.check,
+        wait_timeout=args.wait_timeout,
     )
     print(json.dumps(result.to_dict(), indent=2))
 

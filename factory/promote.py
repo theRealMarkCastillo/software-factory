@@ -380,6 +380,11 @@ def promote_ref(
             artifacts_dir, repo, candidate, base
         )
         result.verification = verification.as_dict()
+        if verification.evidence.get("mode") == "deployment":
+            return reject(
+                "deployment_not_promotable",
+                "deployment evidence validates a local deployment; promotion requires acceptance evidence",
+            )
         if not verification.ok:
             return reject(
                 f"evidence_rejected:{verification.reason}",
@@ -403,6 +408,11 @@ def promote_ref(
             artifacts_dir, repo, candidate, base
         )
         result.verification = reverified.as_dict()
+        if reverified.evidence.get("mode") == "deployment":
+            return reject(
+                "deployment_not_promotable",
+                "promotion requires acceptance evidence, not deployment evidence",
+            )
         if not reverified.ok:
             return reject(
                 f"evidence_rejected:{reverified.reason}",

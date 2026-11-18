@@ -18,7 +18,7 @@ New fields bind the record to what actually ran:
 | Field | Meaning |
 | --- | --- |
 | `schema` | `{"name": "factory-evidence", "version": 2}`; absence means legacy v1 |
-| `mode` | `acceptance` or `diagnostic`; diagnostic can never certify |
+| `mode` | `acceptance`, `diagnostic`, or opt-in `deployment`; diagnostic can never certify |
 | `source` | `sha`, `clean`, and the `start`/`end` snapshots captured before gates and after execution |
 | `base` | `ref`, `kind`, and the **immutable commit SHA** the coverage gate measured against, captured before any gate ran |
 | `engine` | engine name/version/Python plus a `sha256:` fingerprint over every `factory/*.py` file |
@@ -60,7 +60,7 @@ Checks, in order (first failure wins; every executed check is reported):
    `legacy_schema_unsupported` rather than a missing digest).
 3. sidecar present and matching the manifest bytes.
 4. structural completeness and strict types (booleans are not integers).
-5. `mode == "acceptance"` and `gates_run is true`.
+5. mode is `acceptance` or `deployment`, and `gates_run is true`.
 6. clean source at start, identical start/end snapshots.
 7. execution completed with exit `0`.
 8. teardown attempted and successful; postflight clean with no protected,
@@ -83,6 +83,32 @@ Checks, in order (first failure wins; every executed check is reported):
 Reason codes are a closed set documented in `factory/evidence.py`
 (`REASON_CODES`); gate and artifact families carry a `:<gate>` / `:<name>`
 suffix, e.g. `gate_unavailable:audit`, `artifact_hash_mismatch:compose.log`.
+
+## Deployment evidence class
+
+Default runs still reject published ports. Explicit `--deployment --check`
+validates the real dev Compose deployment with allocated loopback-only ports and
+a trusted repository executable running on the host (the same trust boundary as
+host coverage). It keeps the gates, snapshots, logs and finally-teardown.
+See the [quickstart](quickstart.md#validate-a-real-development-deployment-opt-in).
+
+In addition to ordinary schema-v2 evidence, `runtime.deployment` records:
+
+- `ports`: ordered service/target/published/host_ip records, with unique allocated
+  factory ports and `host_ip: 127.0.0.1`;
+- `compose_sha256`: the hash of the executed `compose.resolved.yml` artifact;
+- `check`: repo-relative script `path` and its `sha256`;
+- `wait` and `check_outcome`: success and exit code (or a timeout outcome).
+
+`runtime.teardown` retains the cleanup outcome. Resolved Compose and both host
+check logs are required hashed artifacts. Verification checks the resolved hash,
+exact port map and loopback/range/uniqueness policy, successful wait/check/cleanup,
+and binds the check script's hash to the candidate Git blob. `factory-verify`
+reports the evidence class. `factory-promote` refuses this class with
+`deployment_not_promotable`: acceptance evidence remains the only promotion input.
+Integrity is not same-UID attestation; a writer can still forge a self-consistent
+artifact set, and mutable image tags and inherited Compose environment are not
+attested. No host-script sandbox is implied.
 
 ## Frozen acceptance paths
 

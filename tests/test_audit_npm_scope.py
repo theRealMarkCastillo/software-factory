@@ -22,7 +22,11 @@ def fake_npm(tmp_path, monkeypatch):
         npm.write_text(
             f"#!{sys.executable}\n"
             "import sys\n"
-            f"sys.stdout.write({(json.dumps(report) if raw is None else raw)!r})\n"
+            f"payload = {(json.dumps(report) if raw is None else raw)!r}\n"
+            "if sys.argv[1] == 'ls':\n"
+            "    import json\n"
+            "    payload = json.dumps({'dependencies': {name: {'version': '1'} for name in ('a', 'b', 'c')}})\n"
+            "sys.stdout.write(payload)\n"
             f"print({stderr!r}, file=sys.stderr)\n"
             f"sys.exit({returncode})\n"
         )
@@ -36,7 +40,7 @@ def clean_report():
     return {
         "auditReportVersion": 2,
         "vulnerabilities": {},
-        "metadata": {"vulnerabilities": {"total": 0}, "dependencies": {"total": 3}},
+        "metadata": {"vulnerabilities": {"total": 0}, "dependencies": {"total": 127}},
     }
 
 

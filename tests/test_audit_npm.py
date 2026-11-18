@@ -63,13 +63,17 @@ def run_report(tmp_path, monkeypatch, report):
     (tmp_path / "package-lock.json").write_text("{}\n")
     stdout = json.dumps(report)
     returncode = int(report["metadata"]["vulnerabilities"]["total"] > 0)
-    monkeypatch.setattr(
-        audit.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(
-            args[0], returncode, stdout=stdout, stderr=""
-        ),
-    )
+
+    def run(command, **kwargs):
+        if command[1] == "audit":
+            return subprocess.CompletedProcess(command, returncode, stdout, "")
+        count = report["metadata"]["dependencies"].get("total", 0)
+        tree = {
+            "dependencies": {f"pkg-{i}": {"version": "1"} for i in range(min(count, 6))}
+        }
+        return subprocess.CompletedProcess(command, 0, json.dumps(tree), "")
+
+    monkeypatch.setattr(audit.subprocess, "run", run)
     return audit.run_dependency_audit(str(tmp_path), "typescript")
 
 
@@ -84,7 +88,7 @@ def test_npm_dependency_count_preserves_verdict(
         npm_report["metadata"]["vulnerabilities"] = {"total": 0}
     result = run_report(tmp_path, monkeypatch, npm_report)
     assert result.status == (audit.STATUS_FAIL if vulnerable else audit.STATUS_PASS)
-    assert result.audited == 127
+    assert result.audited == (6 if isinstance(dependencies, dict) else 127)
     assert result.findings == (
         [npm_report["metadata"]["vulnerabilities"]] if vulnerable else []
     )

@@ -1141,9 +1141,13 @@ def _run_pip_audit(repo: Path, manifest: Path) -> AuditResult:
 @dataclass
 class NpmAuditResult(AuditResult):
     npm_scope: str = "production"
+    lock_total: int | None = None
 
     def to_dict(self) -> dict:
-        return {**super().to_dict(), "npm_scope": self.npm_scope}
+        result = {**super().to_dict(), "npm_scope": self.npm_scope}
+        if self.lock_total is not None:
+            result["lock_total"] = self.lock_total
+        return result
 
 
 def _run_npm_audit(repo: Path) -> AuditResult:
@@ -1236,6 +1240,65 @@ def _run_npm_audit(repo: Path) -> AuditResult:
                 command=list(cmd),
                 source="package-lock",
             )
+        lock_total = (
+            dependencies if isinstance(meta.get("dependencies"), dict) else None
+        )
+        if lock_total is not None:
+            # Audit metadata counts the whole lock (including root/workspace
+            # bookkeeping and dev-only optional packages), even with --omit.
+            try:
+                tree_proc = subprocess.run(
+                    [
+                        "npm",
+                        "ls",
+                        "--omit=dev",
+                        "--all",
+                        "--json",
+                        "--package-lock-only",
+                    ],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                    timeout=NPM_TIMEOUT_S,
+                    check=False,
+                )
+                if tree_proc.returncode != 0:
+                    raise ValueError(f"npm ls exited {tree_proc.returncode}")
+                tree = json.loads(tree_proc.stdout)
+                if not isinstance(tree, dict) or not (
+                    "dependencies" in tree or isinstance(tree.get("name"), str)
+                ):
+                    raise ValueError("npm ls returned no dependency tree")
+                packages: set[tuple[str, str]] = set()
+                pending = [tree]
+                while pending:
+                    node = pending.pop()
+                    if node.get("error") or node.get("problems") or node.get("invalid"):
+                        raise ValueError("npm ls reported dependency problems")
+                    children = node.get("dependencies", {})
+                    if not isinstance(children, dict):
+                        raise ValueError("npm ls dependencies is not an object")
+                    for name, entry in children.items():
+                        if (
+                            not name
+                            or not isinstance(entry, dict)
+                            or not isinstance(entry.get("version"), str)
+                            or not entry["version"]
+                        ):
+                            raise ValueError("npm ls dependency has no name/version")
+                        packages.add((name, entry["version"]))
+                        pending.append(entry)
+                dependencies = len(packages)
+            except (OSError, subprocess.TimeoutExpired, ValueError, TypeError) as exc:
+                return NpmAuditResult(
+                    STATUS_INVALID,
+                    "typescript",
+                    detail=f"cannot verify npm production dependency tree: {str(exc)[:400]}",
+                    tool="npm audit",
+                    command=list(cmd),
+                    source="package-lock",
+                    lock_total=lock_total,
+                )
         result = NpmAuditResult(
             STATUS_PASS,
             "typescript",
@@ -1243,6 +1306,7 @@ def _run_npm_audit(repo: Path) -> AuditResult:
             command=list(cmd),
             source="package-lock",
             audited=dependencies,
+            lock_total=lock_total,
             report_sha256=_sha256_bytes((proc.stdout or "").encode("utf-8")),
         )
         if total > 0:

@@ -123,10 +123,11 @@ and the exact `command` argv, including in runner evidence. npm 7+ with audit
 report v2 is required; older/unsupported reports fail closed with an upgrade
 instruction. Dev/build tooling is not vulnerability-gated, so reviewers must
 verify deployed images do not execute dev-only packages (such as a Vite dev
-server as the production server). Python auditing is unchanged. npm's reported
-dependency count remains the report's total inventory, which can include dev
-packages even though vulnerability findings omit them; it is not a count of
-production-only packages.
+server as the production server). Python auditing is unchanged. For object-valued
+npm dependency metadata, `audited` counts distinct `name@version` entries (including
+local workspaces, excluding the root) from `npm ls --omit=dev --all --json
+--package-lock-only`, while `lock_total` retains the whole-lock inventory;
+legacy integer counts are unchanged and an unverified production tree blocks the gate.
 
 ## Legacy evidence and the old checker
 

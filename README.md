@@ -126,6 +126,14 @@ an explicit `FACTORY_HOST_CONFIG` file; see [deployment guidance](docs/deploymen
 
 ## Safety and evidence
 
+### Real deployment validation
+
+Default runs still reject host ports. Opt in with `factory-run --deployment
+--check <repo-relative executable>` to validate a real dev Compose deployment
+using allocated loopback-only ports and a trusted host-side check, like host
+coverage. Deployment evidence can certify but cannot promote: acceptance runs
+remain the promotion input. See the [deployment quickstart](docs/quickstart.md#validate-a-real-development-deployment-opt-in).
+
 Compose validation rejects privileged containers, dangerous mounts, external
 resources, host ports, and other unsafe declarations. Each file is checked before
 merging, so overrides cannot conceal unsafe input. Security-sensitive paths must

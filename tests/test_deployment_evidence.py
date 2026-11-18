@@ -59,6 +59,36 @@ def test_promote_refuses_deployment(tmp_path):
     assert _git(repo, "rev-parse", "release") == base
 
 
+@pytest.mark.parametrize("path", ["../check.sh", "/check.sh", None])
+def test_verify_refuses_invalid_deployment_check_path(tmp_path, path):
+    repo, base, candidate, artifacts = deployment_evidence(tmp_path)
+    _rewrite(artifacts, lambda m: m["runtime"]["deployment"]["check"].update(path=path))
+    result = verify_evidence(artifacts, repo, candidate, base)
+    assert not result.ok
+    assert result.reason == "deployment_invalid"
+
+
+def test_verify_deployment_with_subject_build(tmp_path):
+    from factory.evidence import artifact_records
+
+    repo, base, candidate, artifacts = deployment_evidence(tmp_path)
+    resolved = artifacts / "compose.resolved.yml"
+    resolved.write_text(
+        resolved.read_text().replace("image: nginx", f"build: {{context: '{repo}'}}")
+    )
+
+    def mutate(manifest):
+        manifest["runtime"]["deployment"]["compose_sha256"] = hashlib.sha256(
+            resolved.read_bytes()
+        ).hexdigest()
+        manifest["artifacts"] = artifact_records(
+            artifacts, [r["name"] for r in manifest["artifacts"]]
+        )
+
+    _rewrite(artifacts, mutate)
+    assert verify_evidence(artifacts, repo, candidate, base).ok
+
+
 def test_verify_deployment(tmp_path):
     repo, base, candidate, artifacts = deployment_evidence(tmp_path)
     result = verify_evidence(artifacts, repo, candidate, base)

@@ -35,6 +35,45 @@ failure, not evidence that the workload passed.
 
 ## Use your own project
 
+### Validate a real development deployment (opt-in)
+
+The default still rejects all published host ports. Use `--deployment --check`
+to validate a project's real dev Compose file rather than a special test service:
+
+```sh
+uv run --locked factory-run --deployment \
+  --card deployment-smoke --repo . --base HEAD \
+  --compose examples/deployment-minimal/compose.yml \
+  --check examples/deployment-minimal/check.sh \
+  --env-example examples/deployment-minimal/env.example \
+  --wait-timeout 300 --timeout 300 --artifacts-root ./artifacts
+```
+
+Run from a committed checkout. This example's build context is relative to the
+checkout root. For your own project, use its repository root and real Compose
+file. Supply your intended diff base instead of `HEAD` when measuring changes.
+`--deployment` requires an executable repo-relative `--check`, forbids an explicit
+`--test-service`, and cannot disable gates. The runner writes and validates
+`compose.resolved.yml`, uses the repository as Compose's project directory, and
+runs `up -d --build --wait --wait-timeout S` (default 300 seconds). Profile-gated
+services remain inactive. Single TCP mappings only: no ranges, UDP or host mode.
+Requested IPs and host ports are discarded. Each mapping receives a unique,
+available factory-range port bound only to `127.0.0.1`; the allocator lock is
+held until teardown. All other safety rules are unchanged.
+
+The check runs **on the host**, with repository trust, just like host coverage;
+this is not a sandbox for untrusted repository scripts. Its cwd is the repository,
+its environment contains only available `PATH`, `HOME`, `TMPDIR`, `LANG`, plus
+`FACTORY_HOST=127.0.0.1` and `FACTORY_PORT_<SERVICE>_<CONTAINERPORT>` (uppercase
+service name, non-alphanumerics replaced by `_`). The script's exit code is
+authoritative and `--timeout` bounds it. Use the allocated variables, not requested
+ports. Output goes to `check.stdout.log` and `check.stderr.log`. Wait failure,
+check failure, check timeout and teardown failure have distinct deployment stages.
+
+Deployment evidence can be certified with `factory-verify`, but is **not
+promotable**: acceptance runs remain the promotion input. To exercise the
+example's negative control, substitute `check-fail.sh` for `check.sh`.
+
 Provide a Git working tree, a Compose test service, and an `.env.example` describing
 the environment. Use internal service names instead of published host ports.
 Python projects need pytest and pytest-cov plus project dependencies in the

@@ -111,6 +111,8 @@ REASON_CODES = frozenset(
         "unsupported_schema_version",
         # acceptance semantics
         "mode_not_acceptance",
+        "deployment_invalid",
+        "deployment_check_hash_mismatch",
         "gates_disabled",
         "source_dirty",
         "source_changed_during_run",
@@ -1011,7 +1013,6 @@ def _check_deployment(manifest: dict, directory: Path) -> None:
     from factory.policy import (
         FACTORY_PORT_RANGE_END,
         FACTORY_PORT_RANGE_START,
-        assert_safe_compose_file,
         deployment_port_target,
     )
 
@@ -1024,10 +1025,19 @@ def _check_deployment(manifest: dict, directory: Path) -> None:
     resolved = directory / "compose.resolved.yml"
     if _sha256(resolved) != dep.get("compose_sha256"):
         raise ValueError("resolved Compose hash mismatch")
-    doc = yaml.safe_load(resolved.read_text())
-    assert_safe_compose_file(doc, deployment=True)
+    try:
+        doc = yaml.safe_load(resolved.read_text())
+    except yaml.YAMLError as exc:
+        raise ValueError("invalid resolved Compose YAML") from exc
+    # The producer validated all non-port policy against the subject checkout.
+    # Offline verification must not resolve subject paths against the engine's
+    # own checkout (nor depend on a still-present working tree).
+    if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict):
+        raise ValueError("resolved Compose services missing")
     actual = []
     for service, config in doc["services"].items():
+        if not isinstance(config, dict):
+            raise ValueError("invalid resolved service")
         for mapping in config.get("ports", []) or []:
             if not isinstance(mapping, str) or not re.fullmatch(
                 r"127\.0\.0\.1:[0-9]+:[0-9]+", mapping
@@ -1222,7 +1232,7 @@ def check_evidence(manifest: dict, *, artifacts_dir: str | Path) -> EvidenceChec
     if manifest["mode"] == "deployment":
         try:
             _check_deployment(manifest, Path(artifacts_dir).expanduser().resolve())
-        except (ValueError, OSError, TypeError, KeyError) as exc:
+        except (ValueError, OSError, TypeError, KeyError, _Malformed) as exc:
             return reject("deployment", "deployment_invalid", str(exc))
         accept("deployment")
 

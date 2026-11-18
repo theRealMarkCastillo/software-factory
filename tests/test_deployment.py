@@ -1,7 +1,6 @@
 """Deployment validation remains an explicit, isolated evidence class."""
 
 import json
-import os
 import subprocess
 from pathlib import Path
 
@@ -104,7 +103,7 @@ def test_deployment_lifecycle(monkeypatch, tmp_path, failure, stage):
                     )
             return real_run(cmd, **kwargs)
         assert lock.exists()
-        assert "COMPOSE_PROFILES" not in kwargs.get("env", os.environ)
+        assert kwargs["env"]["COMPOSE_PROFILES"] == ""
         resolved = Path(cmd[cmd.index("--file") + 1])
         assert resolved.name == "compose.resolved.yml"
         doc = yaml.safe_load(resolved.read_text())
@@ -158,7 +157,6 @@ def test_deployment_lifecycle(monkeypatch, tmp_path, failure, stage):
         assert (
             Path(result.artifacts_dir) / "check.stdout.log"
         ).read_text() == "127.0.0.1:49000"
-
 
 
 @pytest.mark.parametrize(

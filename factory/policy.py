@@ -945,7 +945,8 @@ def run_compose(
         import os
 
         env = dict(os.environ)
-        env.pop("COMPOSE_PROFILES", None)
+        # Explicit empty value also overrides COMPOSE_PROFILES from .env.
+        env["COMPOSE_PROFILES"] = ""
         env.pop("COMPOSE_FILE", None)
         options = {"env": env}
     return subprocess.run(
@@ -1383,6 +1384,8 @@ def _acquire_port_lock():
                     if age > _PORT_LOCK_STALE_S:
                         try:
                             holder = int(port_lock.read_text().split()[0])
+                            if holder <= 0:
+                                raise ValueError("invalid lock PID")
                             os.kill(holder, 0)
                         except ProcessLookupError:
                             port_lock.unlink(missing_ok=True)

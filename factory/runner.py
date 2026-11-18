@@ -367,7 +367,7 @@ def run_factory_card(
         raise ValueError("deployment requires gates and deployment evidence mode")
     if wait_timeout <= 0:
         raise ValueError("wait timeout must be positive")
-    test_service = test_service or "test"
+    test_service = "test" if test_service is None else test_service
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}: {mode!r}")
     if mode == "acceptance" and not run_gates:
@@ -391,6 +391,7 @@ def run_factory_card(
     assert_safe_repo_root(repo)
     check_path = None
     if deployment:
+        assert check is not None
         check_path = (repo / check).resolve()
         if (
             Path(check).is_absolute()
@@ -499,6 +500,7 @@ def run_factory_card(
 
     try:
         if deployment:
+            assert yaml is not None and check_path is not None
             port_stack.enter_context(_acquire_port_lock())
             count = sum(
                 len(s.get("ports", []) or [])
@@ -806,8 +808,12 @@ def run_factory_card(
     if not result.passed:
         return result
     try:
-        check = check_evidence(manifest, artifacts_dir=artifacts_dir)
-        failure = "" if check.ok else f"{check.reason}: {check.detail}"
+        evidence_check = check_evidence(manifest, artifacts_dir=artifacts_dir)
+        failure = (
+            ""
+            if evidence_check.ok
+            else f"{evidence_check.reason}: {evidence_check.detail}"
+        )
     except Exception as exc:  # noqa: BLE001 - a crashing checker fails closed
         failure = f"checker_error: {type(exc).__name__}: {exc}"
     if failure:

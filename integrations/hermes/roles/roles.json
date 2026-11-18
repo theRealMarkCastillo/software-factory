@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "roles": {
+    "factory-runner": {
+      "description": "Implementation lane: carries one bounded card to a committed, evidenced candidate.",
+      "soul": "factory-runner.md",
+      "skills": [
+        "worker-software-engineer",
+        "one-verifiable-change",
+        "integration-test-verification",
+        "software-factory-ops",
+        "hermes-kanban-dispatch",
+        "agent-skill-engine-boundary"
+      ],
+      "required_toolsets": ["file", "terminal", "skills", "kanban"],
+      "forbidden_toolsets": ["delegation"]
+    },
+    "factory-qa": {
+      "description": "Independent review lane: verifies a frozen candidate against its spec and evidence.",
+      "soul": "factory-qa.md",
+      "skills": [
+        "factory-qc-gating",
+        "integration-test-verification",
+        "software-factory-ops",
+        "hermes-kanban-dispatch",
+        "agent-skill-engine-boundary"
+      ],
+      "required_toolsets": ["file", "terminal", "skills", "kanban"],
+      "forbidden_toolsets": ["delegation"]
+    },
+    "factory-architect": {
+      "description": "Design lane: turns an accepted spec into ARCHITECTURE.md without writing application code.",
+      "soul": "factory-architect.md",
+      "skills": [
+        "factory-spec-intake",
+        "one-verifiable-change",
+        "hermes-kanban-dispatch",
+        "agent-skill-engine-boundary"
+      ],
+      "required_toolsets": ["file", "terminal", "skills", "kanban"],
+      "forbidden_toolsets": ["delegation"]
+    }
+  }
+}

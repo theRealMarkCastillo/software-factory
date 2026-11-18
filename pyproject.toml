@@ -37,6 +37,7 @@ factory-datamodel = "factory.datamodel:main"
 factory-verify = "factory.verify:main"
 factory-promote = "factory.promote:main"
 factory-learning = "factory.learning:main"
+factory-roles = "factory.roles:main"
 factory-orchestrate = "factory_orchestration.cli:main"
 
 [tool.setuptools.packages.find]

@@ -25,9 +25,47 @@ Only the curated bundle is included. See [the inventory](skill-inventory.md).
 ## Configure your installation
 
 Use the commands supported by your installed Hermes version to create a dedicated
-board and worker profiles. Suggested roles are `factory-runner` for implementation,
-`factory-qa` for evidence verification, and `factory-architect` for design review.
-These names do not create profiles or grant permissions automatically.
+board and worker profiles. The engine defines three worker roles in
+`integrations/hermes/roles/roles.json`: `factory-runner` (implementation),
+`factory-qa` (independent evidence review), and `factory-architect` (design). Each
+role names a host-neutral SOUL template, the curated skills it needs, the toolsets
+it must enable on `cli`, and the toolsets it must not enable on any platform
+(`delegation`). Role names do not create profiles or grant permissions.
+
+Bind your profiles to roles in a JSON file kept with your installation, not here:
+
+```json
+{
+  "schema": 1,
+  "profiles": {
+    "factory-runner": {
+      "role": "factory-runner",
+      "soul_supplement": "roles/factory-runner.md",
+      "model": {"provider": "example-provider", "default": "example-model"}
+    }
+  }
+}
+```
+
+`soul_supplement` (relative to the binding file) carries host facts such as the
+engine `AGENTS.md` path, board slug, and artifacts root; it is appended to the
+template. `model` is optional. Then:
+
+```sh
+factory roles list
+factory roles render factory-qa --supplement roles/factory-qa.md
+factory roles check --binding roles-binding.json --skills-source /path/to/skills
+```
+
+`check` is read-only. It compares each bound profile's `SOUL.md`, `config.yaml`
+toolsets and model, and `skills/` tree with the binding, and exits 0 (conforms),
+1 (drift, with findings), or 2 (invalid manifest or binding). It reads no
+credential files and prints no configuration values other than toolset names
+and model identifiers. Apply a rendered SOUL to a profile deliberately, with a
+backup, while no worker is running; nothing in this repository writes profiles.
+Role skills are a minimum: profiles may carry other skills, but a required skill
+installed twice is drift because Hermes cannot load both. From a wheel install,
+pass `--roles-dir` pointing at a checkout's `integrations/hermes/roles`.
 
 Give workers dedicated workspaces and minimal tool access. Configure the factory
 Python interpreter (`/path/to/software-factory/.venv/bin/python`) and artifact directory explicitly. Verify your Hermes version

@@ -108,6 +108,7 @@ requirements or the reviewer refusal default.
 | `factory.evidence` | Evidence manifest creation and acceptance checks | No |
 | `factory.verify` | Read-only verification of evidence against a candidate/base revision | No |
 | Curated skills | Intake, dispatch, worker behavior, QC | Hermes integration |
+| `factory.roles` and role templates | Worker role contracts; read-only profile conformance check | Hermes integration |
 | Board and profiles | Scheduling, worker permissions, lifecycle transitions | Hermes installation |
 | `factory_orchestration` (optional) | Intra-card LangGraph stages, durable checkpoints, effect reconciliation | Hermes integration, opt-in |
 

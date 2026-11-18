@@ -25,6 +25,7 @@ COMMANDS = {
     "coverage": "factory.coverage",
     "datamodel": "factory.datamodel",
     "learning": "factory.learning",
+    "roles": "factory.roles",
     "orchestrate": "factory_orchestration.cli",
 }
 

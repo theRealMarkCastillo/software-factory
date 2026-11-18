@@ -13,3 +13,9 @@ operations, or publication.
 - Use explicit boards for Hermes commands. Do not bypass delegation restrictions.
 - Stage only intended paths and use conventional commit messages.
 - Commit, push, merge, and deploy only when authorized by the operator.
+
+## Setup and usage (for agents adopting this factory)
+
+- **Standalone / any agent:** Follow `docs/quickstart.md` (`uv sync --locked`, then `uv run --locked factory {run|verify|promote}`). Hermes, LangGraph orchestration (`factory orchestrate`), and a separate ops repo are not required for the core verification and promotion engine.
+- **Hermes + Kanban:** Follow `docs/hermes.md` to install the curated skills from `integrations/hermes/skills/` and configure a board and worker profiles.
+- **Private deployment:** Follow `docs/deployment.md` if separating host policy (`FACTORY_HOST_CONFIG`) and pinned releases into an ops repository.

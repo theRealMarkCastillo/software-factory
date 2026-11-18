@@ -17,5 +17,5 @@ operations, or publication.
 ## Setup and usage (for agents adopting this factory)
 
 - **Standalone / any agent:** Follow `docs/quickstart.md` (`uv sync --locked`, then `uv run --locked factory {run|verify|promote}`). Hermes, LangGraph orchestration (`factory orchestrate`), and a separate ops repo are not required for the core verification and promotion engine.
-- **Hermes + Kanban:** Follow `docs/hermes.md` to install the curated skills from `integrations/hermes/skills/` and configure a board and worker profiles.
+- **Hermes + Kanban:** Follow `docs/hermes.md` to install the curated skills from `integrations/hermes/skills/` and configure a board and worker profiles. Worker role contracts live in `integrations/hermes/roles/`; verify bound profiles with `factory roles check`.
 - **Private deployment:** Follow `docs/deployment.md` if separating host policy (`FACTORY_HOST_CONFIG`) and pinned releases into an ops repository.

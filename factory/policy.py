@@ -584,6 +584,7 @@ def assert_safe_compose_file(
     repo_root: Path | str | None = None,
     *,
     require_services: bool = True,
+    deployment: bool = False,
 ) -> None:
     """
     Statically reject dangerous Compose configuration before it is ever
@@ -739,7 +740,12 @@ def assert_safe_compose_file(
             check_bind_source(source, name=name, repo_root=repo_root)
 
         ports = svc.get("ports", []) or []
-        if ports:
+        if ports and deployment:
+            if not isinstance(ports, list):
+                raise PolicyViolation("deployment ports must be a list")
+            for port in ports:
+                deployment_port_target(port)
+        if ports and not deployment:
             raise PolicyViolation(
                 f"service '{name}': host port publication is forbidden by default "
                 f"(use the internal compose network; escalate explicitly if a port is required)"
@@ -795,6 +801,80 @@ def assert_safe_compose_file(
                 )
 
 
+def deployment_port_target(mapping) -> int:
+    """Parse one static TCP mapping, never ranges or host-mode publication."""
+
+    def port(value):
+        if type(value) not in (str, int) or not re.fullmatch(r"[0-9]+", str(value)):
+            raise PolicyViolation("deployment requires single numeric TCP ports")
+        number = int(value)
+        if not 1 <= number <= 65535:
+            raise PolicyViolation("deployment port outside 1..65535")
+        return number
+
+    if isinstance(mapping, dict):
+        if set(mapping) - {
+            "target",
+            "published",
+            "host_ip",
+            "protocol",
+            "mode",
+            "name",
+            "app_protocol",
+        }:
+            raise PolicyViolation("unsupported deployment port fields")
+        if (
+            mapping.get("protocol", "tcp") != "tcp"
+            or mapping.get("mode", "ingress") != "ingress"
+        ):
+            raise PolicyViolation("deployment requires TCP ports without mode: host")
+        if "published" in mapping:
+            port(mapping["published"])
+        return port(mapping.get("target"))
+    if type(mapping) not in (str, int):
+        raise PolicyViolation("invalid deployment port mapping")
+    text = str(mapping)
+    if text.endswith("/tcp"):
+        text = text[:-4]
+    parts = text.split(":")
+    if not 1 <= len(parts) <= 3 or "$" in text:
+        raise PolicyViolation("deployment requires a single static TCP mapping")
+    if len(parts) > 1:
+        port(parts[-2])
+    return port(parts[-1])
+
+
+def rewrite_deployment_ports(compose_dict: dict, allocated: list[int]) -> list[dict]:
+    """Replace every requested bind with an allocated loopback TCP mapping."""
+    entries = [
+        (name, svc, deployment_port_target(p))
+        for name, svc in compose_dict.get("services", {}).items()
+        for p in svc.get("ports", []) or []
+    ]
+    if len(entries) != len(allocated) or len(set(allocated)) != len(allocated):
+        raise PolicyViolation("deployment allocation must be unique and complete")
+    records = []
+    for svc in compose_dict.get("services", {}).values():
+        if svc.get("ports"):
+            svc["ports"] = []
+    for (name, svc, target), published in zip(entries, allocated, strict=True):
+        if (
+            type(published) is not int
+            or not FACTORY_PORT_RANGE_START <= published < FACTORY_PORT_RANGE_END
+        ):
+            raise PolicyViolation("deployment allocation outside factory range")
+        svc["ports"].append(f"127.0.0.1:{published}:{target}")
+        records.append(
+            {
+                "service": name,
+                "target": target,
+                "published": published,
+                "host_ip": "127.0.0.1",
+            }
+        )
+    return records
+
+
 # Compose global flags a caller may never re-supply: the project name and the
 # compose file set are policy-controlled. Both the spaced, ``=``, and compact
 # (``-pNAME`` / ``-fFILE``) spellings are rejected.
@@ -825,6 +905,9 @@ def run_compose(
     compose_files: list[str],
     args: list[str],
     timeout: int = 900,
+    *,
+    project_directory: str | None = None,
+    deployment: bool = False,
 ) -> subprocess.CompletedProcess:
     """
     The ONLY sanctioned way to invoke `docker compose` from factory code.
@@ -848,19 +931,34 @@ def run_compose(
             )
 
     cmd = ["docker", "compose", "--project-name", project_name]
+    if project_directory is not None:
+        assert_safe_repo_root(Path(project_directory))
+        cmd += ["--project-directory", project_directory]
     for f in compose_files:
         cmd += ["--file", f]
     cmd += args
 
     assert_safe_command(" ".join(cmd))
 
+    options = {}
+    if deployment:
+        import os
+
+        env = dict(os.environ)
+        env.pop("COMPOSE_PROFILES", None)
+        env.pop("COMPOSE_FILE", None)
+        options = {"env": env}
     return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False
+        cmd, capture_output=True, text=True, timeout=timeout, check=False, **options
     )
 
 
 def teardown(
-    project_name: str, compose_files: list[str]
+    project_name: str,
+    compose_files: list[str],
+    *,
+    project_directory: str | None = None,
+    deployment: bool = False,
 ) -> subprocess.CompletedProcess:
     """Tear down ONLY the named factory project's own resources."""
     assert_factory_project(project_name)
@@ -868,6 +966,11 @@ def teardown(
         project_name,
         compose_files,
         ["down", "--volumes", "--remove-orphans", "--timeout", "30"],
+        **(
+            {"project_directory": project_directory, "deployment": True}
+            if deployment
+            else {}
+        ),
     )
 
 
@@ -1187,7 +1290,9 @@ def _parse_port_allowlist(value: str) -> list[int]:
     return ports
 
 
-def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
+def allocate_host_ports(
+    n: int = 1, avoid: str = "CONFLICT", *, lock_held: bool = False
+) -> list[int]:
     """
     Allocate `n` free host TCP ports for a factory test that genuinely
     requires a published port. Lock-guarded (advisory atomic-file lock) so
@@ -1217,7 +1322,11 @@ def allocate_host_ports(n: int = 1, avoid: str = "CONFLICT") -> list[int]:
             raise PolicyViolation(f"requested ports already in use {taken}")
         return free
 
-    with _acquire_port_lock():
+    from contextlib import nullcontext
+
+    if n == 0:
+        return []
+    with nullcontext() if lock_held else _acquire_port_lock():
         picked: list[int] = []
         for port in range(FACTORY_PORT_RANGE_START, FACTORY_PORT_RANGE_END):
             if _is_factory_port_free(port):
@@ -1272,8 +1381,14 @@ def _acquire_port_lock():
                     age = time.time() - stat.st_mtime
                     # Steal only a provably stale marker; never break a live lock.
                     if age > _PORT_LOCK_STALE_S:
-                        port_lock.unlink(missing_ok=True)
-                        continue
+                        try:
+                            holder = int(port_lock.read_text().split()[0])
+                            os.kill(holder, 0)
+                        except ProcessLookupError:
+                            port_lock.unlink(missing_ok=True)
+                            continue
+                        except (ValueError, IndexError, PermissionError):
+                            pass
                 except FileNotFoundError:
                     continue  # vanished between check and open; retry immediately
                 if time.time() >= deadline:

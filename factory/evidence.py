@@ -57,7 +57,7 @@ SIDECAR_FILENAME = "evidence-manifest.sha256"
 MANIFEST_MAX_BYTES = 1024 * 1024
 SIDECAR_MAX_BYTES = 4096
 REQUIRED_ARTIFACTS = ("up.stdout.log", "up.stderr.log", "compose.log")
-MODES = ("acceptance", "diagnostic")
+MODES = ("acceptance", "diagnostic", "deployment")
 ENGINE_NAME = "hermes-software-factory"
 ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -1004,6 +1004,69 @@ def _check_artifacts(manifest: dict, artifacts_dir: Path) -> tuple[bool, str, st
     return True, "", ""
 
 
+def _check_deployment(manifest: dict, directory: Path) -> None:
+    """Bind loopback allocations and successful lifecycle to resolved Compose."""
+    import yaml
+
+    from factory.policy import (
+        FACTORY_PORT_RANGE_END,
+        FACTORY_PORT_RANGE_START,
+        assert_safe_compose_file,
+        deployment_port_target,
+    )
+
+    dep = manifest["runtime"].get("deployment")
+    if not isinstance(dep, dict):
+        raise ValueError("deployment record missing")
+    names = {record["name"] for record in manifest["artifacts"]}
+    if not {"compose.resolved.yml", "check.stdout.log", "check.stderr.log"} <= names:
+        raise ValueError("deployment artifacts missing")
+    resolved = directory / "compose.resolved.yml"
+    if _sha256(resolved) != dep.get("compose_sha256"):
+        raise ValueError("resolved Compose hash mismatch")
+    doc = yaml.safe_load(resolved.read_text())
+    assert_safe_compose_file(doc, deployment=True)
+    actual = []
+    for service, config in doc["services"].items():
+        for mapping in config.get("ports", []) or []:
+            if not isinstance(mapping, str) or not re.fullmatch(
+                r"127\.0\.0\.1:[0-9]+:[0-9]+", mapping
+            ):
+                raise ValueError("deployment mapping is not allocated loopback TCP")
+            published = int(mapping.split(":")[1])
+            if not FACTORY_PORT_RANGE_START <= published < FACTORY_PORT_RANGE_END:
+                raise ValueError("deployment mapping outside factory range")
+            actual.append(
+                {
+                    "service": service,
+                    "target": deployment_port_target(mapping),
+                    "published": published,
+                    "host_ip": "127.0.0.1",
+                }
+            )
+    if actual != dep.get("ports") or len({p["published"] for p in actual}) != len(
+        actual
+    ):
+        raise ValueError("deployment port map mismatch or duplicate allocation")
+    script = dep.get("check")
+    if not isinstance(script, dict):
+        raise ValueError("deployment check missing")
+    _check_fixture_path(script.get("path"), 0)
+    if not isinstance(script.get("sha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", script["sha256"]
+    ):
+        raise ValueError("deployment check hash missing")
+    for key in ("wait", "check_outcome"):
+        outcome = dep.get(key, {})
+        if (
+            not isinstance(outcome, dict)
+            or outcome.get("ok") is not True
+            or type(outcome.get("exit_code")) is not int
+            or outcome["exit_code"] != 0
+        ):
+            raise ValueError(f"deployment {key} did not succeed")
+
+
 def check_evidence(manifest: dict, *, artifacts_dir: str | Path) -> EvidenceCheck:
     """Schema-v2 acceptance checks that need no repository comparison.
 
@@ -1055,7 +1118,7 @@ def check_evidence(manifest: dict, *, artifacts_dir: str | Path) -> EvidenceChec
         return reject("structure", "malformed_manifest", str(exc))
     accept("structure")
 
-    if manifest["mode"] != "acceptance":
+    if manifest["mode"] not in ("acceptance", "deployment"):
         return reject(
             "mode",
             "mode_not_acceptance",
@@ -1155,6 +1218,13 @@ def check_evidence(manifest: dict, *, artifacts_dir: str | Path) -> EvidenceChec
     if not artifacts_ok:
         return reject("artifacts", artifacts_reason, artifacts_detail)
     accept("artifacts")
+
+    if manifest["mode"] == "deployment":
+        try:
+            _check_deployment(manifest, Path(artifacts_dir).expanduser().resolve())
+        except (ValueError, OSError, TypeError, KeyError) as exc:
+            return reject("deployment", "deployment_invalid", str(exc))
+        accept("deployment")
 
     return EvidenceCheck(True, "ok", "", checks, claims)
 
@@ -1524,6 +1594,16 @@ def verify_evidence(
             )
     if core.gate_claims:
         accept("gate_substantiation")
+
+    if manifest["mode"] == "deployment":
+        script = manifest["runtime"]["deployment"]["check"]
+        if _blob_sha256(repo, candidate, script["path"]) != script["sha256"]:
+            return reject(
+                "deployment",
+                "deployment_check_hash_mismatch",
+                "host check is not bound to candidate script content",
+            )
+        accept("deployment_check_source")
 
     for record in manifest["fixtures"]:
         if record["tracked"] is not True:

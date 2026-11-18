@@ -75,6 +75,7 @@ def render_human(result: VerificationResult) -> str:
     if result.ok:
         lines = [
             f"factory-verify: CERTIFIED {result.candidate} (base {result.base})",
+            f"  evidence class: {result.evidence.get('mode', 'acceptance')}",
         ]
     else:
         lines = [

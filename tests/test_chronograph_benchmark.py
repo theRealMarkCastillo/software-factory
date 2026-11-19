@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import subprocess
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -13,10 +14,81 @@ ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / "benchmarks" / "chronograph"
 
 
+ORIGINAL_SHA256 = "4b00410e74d5d07f500680f6d598e8e3899803207af750ea2d562cf2c062e256"
+# Construct the historical name only for the baseline Git lookup and absence check.
+HISTORICAL_NAME = "00-" + "master-spec-as-received.md"
+
+
+def test_original_is_byte_identical_to_owner_handoff():
+    original = KIT / "spec/00-original.md"
+    assert original.is_file()
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == ORIGINAL_SHA256
+    assert (KIT / "spec/SHA256SUMS").read_text() == (
+        f"{ORIGINAL_SHA256}  spec/00-original.md\n"
+    )
+
+
+def test_condensed_body_preserves_baseline_bytes_after_eight_line_preamble():
+    baseline = subprocess.check_output(
+        ["git", "show", f"4961360:benchmarks/chronograph/spec/{HISTORICAL_NAME}"],
+        cwd=ROOT,
+    )
+    condensed = KIT / "spec/00-condensed-spec.md"
+    assert condensed.is_file()
+    lines = condensed.read_bytes().splitlines(keepends=True)
+    assert b"".join(lines[8:]) == b"".join(baseline.splitlines(keepends=True)[8:])
+    preamble = b"".join(lines[:8]).decode()
+    for phrase in (
+        "condensed working copy",
+        "00-original.md",
+        "reference run",
+        "amendments interleaved",
+        "01-ratified-decisions.md",
+        "overrides both",
+    ):
+        assert phrase in preamble
+
+
+def test_spec_provenance_matches_both_files():
+    path = KIT / "spec/provenance.json"
+    assert path.is_file()
+    provenance = json.loads(path.read_text())
+    assert provenance["original"] == {
+        "file": "00-original.md",
+        "source_name": "ChronoGraph_ Master Handoff & Architecture Specification.md",
+        "sha256": ORIGINAL_SHA256,
+        "source_url": "https://github.com/eidolonlabs-ai/hermes-factory/blob/"
+        "c2021211962ab3def7598cdcf75d7b844b3ac5a0/benchmarks/chronograph/input/original.md",
+        "source_commit": "c2021211962ab3def7598cdcf75d7b844b3ac5a0",
+    }
+    assert provenance["condensed"] == {
+        "file": "00-condensed-spec.md",
+        "sha256": hashlib.sha256(
+            (KIT / "spec/00-condensed-spec.md").read_bytes()
+        ).hexdigest(),
+        "derived_from": "00-original.md",
+        "relationship": "Condensed working copy used to drive the reference run; "
+        "amendments interleaved; 01-ratified-decisions.md overrides both.",
+    }
+
+
+def test_no_obsolete_spec_filename_references_remain():
+    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT)
+    for name in tracked.decode().split("\0"):
+        path = ROOT / name
+        if name and path.is_file():
+            assert HISTORICAL_NAME.encode() not in path.read_bytes(), name
+    assert not (KIT / "spec" / HISTORICAL_NAME).exists()
+
+
 def test_chronograph_benchmark_is_complete_consistent_and_public():
     expected = {
         "README.md",
-        "spec/00-master-spec-as-received.md",
+        "spec/00-original.md",
+        "spec/00-condensed-spec.md",
+        "spec/.gitattributes",
+        "spec/provenance.json",
+        "spec/SHA256SUMS",
         "spec/01-ratified-decisions.md",
         "spec/02-ui-contract.md",
         "contracts/openapi.yaml",
@@ -27,14 +99,10 @@ def test_chronograph_benchmark_is_complete_consistent_and_public():
     assert KIT.is_dir(), "ChronoGraph benchmark kit is missing"
     assert {str(p.relative_to(KIT)) for p in KIT.rglob("*") if p.is_file()} == expected
 
-    # Source commit 2697d343b0b6005a1b0c5e9575a1702e1173885b:
-    # docs/spec/00-master-spec-as-received.md, with no sanitization needed.
-    preserved_spec = "benchmarks/chronograph/spec/00-master-spec-as-received.md"
-    assert hashlib.sha256((ROOT / preserved_spec).read_bytes()).hexdigest() == (
-        "959c4e2ce2004401b97901c533eb8c1c8e50a0eaabf690c81c1395c4b922fd96"
-    )
+    preserved_spec = "benchmarks/chronograph/spec/00-original.md"
     config = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert config["tool"]["ruff"].get("extend-exclude") == [preserved_spec]
+    assert (KIT / "spec/.gitattributes").read_bytes() == b"00-original.md -text\n"
 
     sums = {}
     for line in (KIT / "fixtures/SHA256SUMS").read_text().splitlines():

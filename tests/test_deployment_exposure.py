@@ -58,20 +58,21 @@ def test_source_mapping_policy(mapping, allowed):
 
 @pytest.mark.parametrize("overridden", [False, True])
 def test_source_exposure_refusal_records_every_mapping_before_docker(
-    monkeypatch, tmp_path, overridden
+    monkeypatch, tmp_path, overridden, capsys
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
     mappings = ["8080:80", {"target": 81, "published": 8081, "host_ip": "0.0.0.0"}]
     (repo / "compose.yml").write_text(
-        yaml.safe_dump({"services": {"web": {"image": "nginx", "ports": mappings}}})
+        yaml.safe_dump(
+            {"services": {"web": {"image": "nginx", "ports": mappings}}},
+            sort_keys=False,
+        )
     )
     files = ["compose.yml"]
     if overridden:
         (repo / "override.yml").write_text(
-            yaml.safe_dump(
-                {"services": {"web": {"ports": ["127.0.0.1:8080:80"]}}}
-            )
+            yaml.safe_dump({"services": {"web": {"ports": ["127.0.0.1:8080:80"]}}})
         )
         files.append("override.yml")
     script = repo / "check.sh"
@@ -125,3 +126,28 @@ def test_source_exposure_refusal_records_every_mapping_before_docker(
     assert [item["spec"] for item in refusals] == mappings
     assert all(item["service"] == "web" and item["reason"] for item in refusals)
     assert manifest["runtime"]["teardown"]["attempted"] is False
+
+    # Exercise the shipped CLI's JSON result and nonzero exit convention too.
+    assert (
+        runner.main(
+            [
+                "--card",
+                "exposure-cli",
+                "--repo",
+                str(repo),
+                "--compose",
+                "compose.yml",
+                "--deployment",
+                "--check",
+                "check.sh",
+                "--artifacts-root",
+                str(tmp_path / "artifacts"),
+            ]
+        )
+        == 1
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["stage"] == "exposure_refused"
+    assert printed["passed"] is False
+    assert printed["error"] == result.error
+    assert not [argv for argv in calls if argv[0] == "docker"]

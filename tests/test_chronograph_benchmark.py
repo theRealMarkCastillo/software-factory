@@ -81,6 +81,22 @@ def test_no_obsolete_spec_filename_references_remain():
     assert not (KIT / "spec" / HISTORICAL_NAME).exists()
 
 
+def test_original_git_attributes_preserve_only_the_verbatim_source():
+    assert (KIT / "spec/.gitattributes").read_bytes() == (
+        b"00-original.md -text -whitespace\n"
+    )
+    path = "benchmarks/chronograph/spec/00-original.md"
+    attributes = subprocess.check_output(
+        ["git", "check-attr", "whitespace", "text", "--", path],
+        cwd=ROOT,
+        text=True,
+    )
+    assert attributes.splitlines() == [
+        f"{path}: whitespace: unset",
+        f"{path}: text: unset",
+    ]
+
+
 def test_chronograph_benchmark_is_complete_consistent_and_public():
     expected = {
         "README.md",
@@ -105,7 +121,6 @@ def test_chronograph_benchmark_is_complete_consistent_and_public():
         "benchmarks/chronograph/spec/00-condensed-spec.md",
         preserved_spec,
     ]
-    assert (KIT / "spec/.gitattributes").read_bytes() == b"00-original.md -text\n"
 
     sums = {}
     for line in (KIT / "fixtures/SHA256SUMS").read_text().splitlines():

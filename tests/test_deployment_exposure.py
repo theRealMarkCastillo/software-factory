@@ -10,6 +10,13 @@ import yaml
 from factory import policy, runner
 
 
+def test_shipped_deployment_example_passes_source_exposure_policy():
+    repo = Path(__file__).resolve().parents[1]
+    doc = yaml.safe_load((repo / "examples/deployment-minimal/compose.yml").read_text())
+    assert doc["services"]["web"]["ports"], "Keep the example's published-port proof"
+    policy.assert_safe_compose_file(doc, repo_root=repo, deployment=True)
+
+
 @pytest.mark.parametrize(
     "mapping,allowed",
     [

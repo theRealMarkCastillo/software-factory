@@ -352,7 +352,7 @@ def test_identity_ambiguity_stays_unmatched(tmp_path):
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["total"]["matched_runs"] == 1
-    assert report["unmatched_runs"][0]["reason"] == "equidistant sessions"
+    assert report["unmatched_runs"][0]["reason"] == "ambiguous identifying sessions"
 
 
 def test_identity_cannot_select_outside_tolerance(tmp_path):
@@ -367,6 +367,126 @@ def test_identity_cannot_select_outside_tolerance(tmp_path):
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["unmatched_runs"][0]["reason"] == "no session within tolerance"
+
+
+@pytest.mark.parametrize(
+    "rows, expected, reason",
+    [
+        pytest.param(
+            [
+                ("winner", 100.81, "PRODUCT-A build", "/synthetic/shared"),
+                ("repair", 100.87, "PRODUCT-A repair…", "/synthetic/shared"),
+            ],
+            "winner",
+            None,
+            id="shared-cwd-different-title",
+        ),
+        pytest.param(
+            [
+                ("title-only", 100.1, "PRODUCT-A build", None),
+                ("winner", 102, "PRODUCT-A build", "/synthetic/shared"),
+            ],
+            "winner",
+            None,
+            id="both-beats-nearer-title-only",
+        ),
+        pytest.param(
+            [
+                ("cwd-only", 100.1, "OTHER", "/synthetic/shared"),
+                ("winner", 102, "PRODUCT-A b… #2", None),
+            ],
+            "winner",
+            None,
+            id="title-only-beats-nearer-cwd-only",
+        ),
+        pytest.param(
+            [
+                ("first", 101, "PRODUCT-A build", "/synthetic/shared"),
+                ("second", 102, "PRODUCT-A build", "/synthetic/shared"),
+                ("lower", 100, "PRODUCT-A build", None),
+            ],
+            None,
+            "ambiguous identifying sessions",
+            id="tied-highest-rank",
+        ),
+        pytest.param(
+            [("first", 99, None, None), ("second", 101, None, None)],
+            None,
+            "equidistant sessions",
+            id="fallback-equidistance",
+        ),
+        pytest.param(
+            [("near", 101, None, None), ("far", 102, None, None)],
+            "near",
+            None,
+            id="fallback-nearest",
+        ),
+        pytest.param(
+            [
+                ("outside", 116, "PRODUCT-A build", "/synthetic/shared"),
+                ("winner", 101, None, None),
+            ],
+            "winner",
+            None,
+            id="outside-identity-does-not-block-fallback",
+        ),
+        pytest.param(
+            [("outside", 116, "PRODUCT-A build", "/synthetic/shared")],
+            None,
+            "no session within tolerance",
+            id="outside-both-rejected",
+        ),
+    ],
+)
+def test_cli_identity_ranking(tmp_path, rows, expected, reason):
+    exports, home = make_exports(tmp_path)
+    path = exports / "card-a.json"
+    card = json.loads(path.read_text())
+    card["task"]["workspace_path"] = "/synthetic/shared"
+    path.write_text(json.dumps(card))
+    with sqlite3.connect(home / "profiles/builder/state.db") as db:
+        db.execute("DELETE FROM sessions")
+        db.execute("ALTER TABLE sessions ADD COLUMN title TEXT")
+        db.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT")
+        db.executemany(
+            "INSERT INTO sessions (id, started_at, title, cwd, source) "
+            "VALUES (?, ?, ?, ?, 'kanban')",
+            rows,
+        )
+    result = run_cli(exports, home, "--json")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    matches = [m for m in report["matches"] if m["card_id"] == "card-a"]
+    unmatched = [m for m in report["unmatched_runs"] if m["card_id"] == "card-a"]
+    if expected is not None:
+        assert [m["session_id"] for m in matches] == [expected]
+        assert unmatched == []
+    else:
+        assert matches == []
+        assert [m["reason"] for m in unmatched] == [reason]
+
+
+def test_ranked_identity_session_cannot_be_reused(tmp_path):
+    exports, home = make_exports(tmp_path)
+    card = json.loads((exports / "card-a.json").read_text())
+    card["task"]["workspace_path"] = "/synthetic/shared"
+    card["runs"].append({**card["runs"][0], "id": 99, "started_at": 101})
+    (exports / "card-a.json").write_text(json.dumps(card))
+    with sqlite3.connect(home / "profiles/builder/state.db") as db:
+        db.execute("ALTER TABLE sessions ADD COLUMN title TEXT")
+        db.execute("ALTER TABLE sessions ADD COLUMN cwd TEXT")
+        db.execute(
+            "UPDATE sessions SET title = 'PRODUCT-A build', "
+            "cwd = '/synthetic/shared' WHERE id = 'session-a'"
+        )
+    result = run_cli(exports, home, "--json")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert [m["card_id"] for m in report["matches"]] == ["card-b"]
+    assert [m["reason"] for m in report["unmatched_runs"]] == [
+        "session selected by multiple runs",
+        "session selected by multiple runs",
+    ]
 
 
 def test_default_does_not_read_nonmatching_export(tmp_path):

@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: ChronoGraph Temporal API
+  version: 1.0.0
+  description: >
+    Temporal knowledge graph ingestion, fact versioning and functional-predicate
+    superseding. Binding wire contract; semantics in docs/spec/01-ratified-decisions.md.
+    All timestamps are ISO 8601 UTC with "Z".
+paths:
+  /api/health:
+    get:
+      summary: System healthcheck
+      responses:
+        '200':
+          description: Both stores reachable.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+              example: {status: ok, postgres: ok, neo4j: ok}
+        '503':
+          description: One or more stores unreachable.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Health'}
+              example: {status: degraded, postgres: ok, neo4j: error}
+  /api/episodes:
+    post:
+      summary: Ingest an episode and run the rule-based extraction pipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/EpisodeCreate'}
+      responses:
+        '201':
+          description: Episode stored; facts derived; conflicts resolved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/IngestResult'}
+        '409':
+          description: Out-of-order functional assertion (SC-05). Nothing persisted.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OutOfOrderError'}
+        '422':
+          description: Validation failure, or conflicting functional assertions within one episode (SC-05).
+    get:
+      summary: List episodes ordered by observed_at then created_at ascending
+      responses:
+        '200':
+          description: Episodes with extraction metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [episodes]
+                properties:
+                  episodes:
+                    type: array
+                    items: {$ref: '#/components/schemas/Episode'}
+  /api/graph:
+    get:
+      summary: Point-in-time graph topology (read from the Neo4j projection)
+      parameters:
+        - {name: as_of, in: query, required: false, schema: {type: string, format: date-time}, description: 'Default now (UTC). Must carry an offset or Z.'}
+        - {name: include_superseded, in: query, required: false, schema: {type: boolean, default: false}}
+      responses:
+        '200':
+          description: Nodes and edges per SC-09.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Graph'}
+        '422':
+          description: Naive or unparsable as_of.
+  /api/facts:
+    get:
+      summary: Query the fact ledger, ordered by valid_from, created_at, id ascending
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [active, superseded, all], default: active}}
+        - {name: entity, in: query, schema: {type: string}, description: 'Exact match on subject OR object.'}
+      responses:
+        '200':
+          description: Ledger facts (ledger status, not temporal status).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [facts]
+                properties:
+                  facts:
+                    type: array
+                    items: {$ref: '#/components/schemas/Fact'}
+        '422':
+          description: Invalid status value.
+  /api/conflicts:
+    get:
+      summary: Conflict replacement chains
+      description: >
+        One chain per (subject, predicate) that has at least one superseded fact.
+        Chains ordered by first version valid_from, then subject, then predicate.
+        Versions ordered by valid_from, numbered from 1.
+      responses:
+        '200':
+          description: Ordered chains.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [chains]
+                properties:
+                  chains:
+                    type: array
+                    items: {$ref: '#/components/schemas/ConflictChain'}
+  /api/demo/seed:
+    post:
+      summary: Wipe both stores and ingest fixtures/demo-seed.json in order
+      responses:
+        '200':
+          description: Reseeded.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SeedResult'}
+components:
+  schemas:
+    Health:
+      type: object
+      required: [status, postgres, neo4j]
+      properties:
+        status: {type: string, enum: [ok, degraded]}
+        postgres: {type: string, enum: [ok, error]}
+        neo4j: {type: string, enum: [ok, error]}
+    EpisodeCreate:
+      type: object
+      required: [title, raw_text, observed_at]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 255}
+        source_type: {type: string, default: text, maxLength: 50}
+        raw_text: {type: string, minLength: 1}
+        observed_at: {type: string, format: date-time}
+    Episode:
+      type: object
+      required: [id, title, source_type, observed_at, created_at, extracted_count, conflicts_resolved_count]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        source_type: {type: string}
+        observed_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        extracted_count: {type: integer}
+        conflicts_resolved_count: {type: integer}
+    Fact:
+      type: object
+      required: [id, subject, predicate, object, valid_from, valid_until, status, superseded_by_id, episode_id, neo4j_synced_at]
+      properties:
+        id: {type: string, format: uuid}
+        subject: {type: string}
+        predicate: {type: string}
+        object: {type: string}
+        valid_from: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time, nullable: true}
+        status: {type: string, enum: [active, superseded, retracted]}
+        superseded_by_id: {type: string, format: uuid, nullable: true}
+        episode_id: {type: string, format: uuid}
+        neo4j_synced_at: {type: string, format: date-time, nullable: true}
+    IngestResult:
+      type: object
+      required: [episode, facts_created, facts_superseded, reaffirmed, skipped_lines, projection]
+      properties:
+        episode: {$ref: '#/components/schemas/Episode'}
+        facts_created: {type: array, items: {$ref: '#/components/schemas/Fact'}}
+        facts_superseded: {type: array, items: {$ref: '#/components/schemas/Fact'}, description: 'Post-update state of facts this episode superseded.'}
+        reaffirmed: {type: array, items: {type: string, format: uuid}}
+        skipped_lines: {type: array, items: {type: string}}
+        projection: {type: string, enum: [synced, pending]}
+    OutOfOrderError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, subject, predicate, active_valid_from, observed_at]
+          properties:
+            code: {type: string, enum: [out_of_order]}
+            subject: {type: string}
+            predicate: {type: string}
+            active_valid_from: {type: string, format: date-time}
+            observed_at: {type: string, format: date-time}
+    GraphNode:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, description: 'Entity name'}
+        name: {type: string}
+    GraphEdge:
+      type: object
+      required: [id, fact_id, source, target, predicate, valid_from, valid_until, status, episode_id]
+      properties:
+        id: {type: string, format: uuid, description: 'Equals fact_id'}
+        fact_id: {type: string, format: uuid}
+        source: {type: string}
+        target: {type: string}
+        predicate: {type: string}
+        valid_from: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time, nullable: true}
+        status: {type: string, enum: [active, superseded], description: 'Temporal status at as_of'}
+        episode_id: {type: string, format: uuid}
+    Graph:
+      type: object
+      required: [as_of, include_superseded, nodes, edges]
+      properties:
+        as_of: {type: string, format: date-time}
+        include_superseded: {type: boolean}
+        nodes: {type: array, items: {$ref: '#/components/schemas/GraphNode'}}
+        edges: {type: array, items: {$ref: '#/components/schemas/GraphEdge'}}
+    ChainVersion:
+      type: object
+      required: [version, fact_id, object, valid_from, valid_until, status, episode_id]
+      properties:
+        version: {type: integer, minimum: 1}
+        fact_id: {type: string, format: uuid}
+        object: {type: string}
+        valid_from: {type: string, format: date-time}
+        valid_until: {type: string, format: date-time, nullable: true}
+        status: {type: string, enum: [active, superseded, retracted]}
+        episode_id: {type: string, format: uuid}
+    ConflictChain:
+      type: object
+      required: [subject, predicate, versions]
+      properties:
+        subject: {type: string}
+        predicate: {type: string}
+        versions: {type: array, items: {$ref: '#/components/schemas/ChainVersion'}}
+    SeedResult:
+      type: object
+      required: [status, episodes, facts, active, superseded, chains, entities]
+      properties:
+        status: {type: string, enum: [ok]}
+        episodes: {type: integer}
+        facts: {type: integer}
+        active: {type: integer}
+        superseded: {type: integer}
+        chains: {type: integer}
+        entities: {type: integer}

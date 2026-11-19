@@ -1,0 +1,43 @@
+{
+  "fixture": "demo-seed",
+  "version": 1,
+  "functional_predicates": [
+    "HAS_IP",
+    "CURRENT_ROLE",
+    "STATUS",
+    "LOCATION",
+    "ASSIGNED_TO",
+    "VERSION",
+    "PRIMARY_HOST"
+  ],
+  "episodes": [
+    {
+      "key": "E1",
+      "title": "Initial Setup",
+      "source_type": "text",
+      "observed_at": "2026-01-01T00:00:00Z",
+      "raw_text": "- AuthCluster | HAS_IP | 10.0.0.12\n- AuthCluster | VERSION | 1.0.0\n- AuthCluster | STATUS | HEALTHY\n- Alice | CURRENT_ROLE | Infrastructure Lead\n"
+    },
+    {
+      "key": "E2",
+      "title": "IP Reassignment & Promotion",
+      "source_type": "text",
+      "observed_at": "2026-01-05T12:00:00Z",
+      "raw_text": "- AuthCluster | HAS_IP | 10.0.0.45\n- Alice | CURRENT_ROLE | Principal Architect\n"
+    },
+    {
+      "key": "E3",
+      "title": "Incident Outage",
+      "source_type": "text",
+      "observed_at": "2026-01-10T08:30:00Z",
+      "raw_text": "- AuthCluster | STATUS | DEGRADED\n- AuthCluster | ASSIGNED_TO | Alice\n"
+    },
+    {
+      "key": "E4",
+      "title": "Hotfix Deployment",
+      "source_type": "text",
+      "observed_at": "2026-01-10T09:15:00Z",
+      "raw_text": "- AuthCluster | VERSION | 1.0.1\n- AuthCluster | STATUS | HEALTHY\n"
+    }
+  ]
+}

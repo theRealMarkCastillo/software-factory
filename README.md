@@ -14,6 +14,7 @@ a hosted service, a general-purpose agent runtime, or a sandbox for hostile code
 - **Use another agent or a shell:** follow [the standalone quickstart](docs/quickstart.md).
   The engine does not import Hermes or require a running Hermes gateway.
 - **Contribute:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Benchmark your factory:** build the [ChronoGraph benchmark kit](benchmarks/chronograph/).
 
 ## What it does
 

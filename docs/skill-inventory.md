@@ -19,6 +19,15 @@ These eight skills live under `integrations/hermes/skills`. They intentionally d
 not copy the local source folders verbatim or include runtime backups and incident
 records. The local Hermes installation has not been modified.
 
+The portable chain reference
+`software-factory-ops/references/greenfield-compose-chains.md` (under
+`integrations/hermes/skills/`) generalizes the multi-service Compose workflow:
+owner-ratified pre-build consistency audit, frozen-input delivery, tests-only RED
+commits, separate acceptance/deployment evidence, a mandatory final real operator
+smoke, and wake-only intermediate notifications. Intake and ops link to it; the
+installer copies it with the skill directory. Private installation commands,
+identities, host details, and incident-specific examples are not included.
+
 Historical operational skills, incident notes, archived workflows, and general
 third-party skill libraries are excluded from this snapshot. Generic code review,
 TDD, debugging, and multi-reviewer skills may be installed separately according to

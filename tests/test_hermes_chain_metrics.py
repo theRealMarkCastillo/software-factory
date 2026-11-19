@@ -63,8 +63,17 @@ def make_exports(tmp_path):
                 conn.execute(
                     "INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        session, start, source, f"model-{profile}", 2, 100, 20,
-                        300, 10, 5, 9 if included else 0.5,
+                        session,
+                        start,
+                        source,
+                        f"model-{profile}",
+                        2,
+                        100,
+                        20,
+                        300,
+                        10,
+                        5,
+                        9 if included else 0.5,
                         8 if included else 0.4,
                         "subscription" if included else "api",
                         "subscription_included" if included else "priced",
@@ -75,10 +84,22 @@ def make_exports(tmp_path):
 
 def run_cli(exports, home, *extra):
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--board", "example-board", "--prefix",
-         "PRODUCT-A", "--hermes-home", str(home), "--kanban-json-dir",
-         str(exports), *extra],
-        text=True, capture_output=True, check=False,
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--board",
+            "example-board",
+            "--prefix",
+            "PRODUCT-A",
+            "--hermes-home",
+            str(home),
+            "--kanban-json-dir",
+            str(exports),
+            *extra,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
     )
 
 
@@ -137,3 +158,127 @@ def test_text_output_and_tolerance_override(tmp_path):
     assert "subscription_included" in result.stdout
     assert "Unmatched runs: 0" in result.stdout
     assert "actual_cost_usd" in result.stdout
+
+
+def test_subscription_billing_mode_never_counts_prices(tmp_path):
+    exports, home = make_exports(tmp_path)
+    with sqlite3.connect(home / "profiles/reviewer/state.db") as db:
+        db.execute("UPDATE sessions SET cost_status = NULL")
+    result = run_cli(exports, home, "--json")
+    assert result.returncode == 0, result.stderr
+    total = json.loads(result.stdout)["total"]
+    assert total["estimated_cost_usd"] == 0.5
+    assert total["actual_cost_usd"] == 0.4
+
+
+@pytest.mark.parametrize("case", ["tie", "reuse", "missing-db"])
+def test_uncertain_matches_are_reported_not_guessed(tmp_path, case):
+    exports, home = make_exports(tmp_path)
+    path = home / "profiles/builder/state.db"
+    if case == "missing-db":
+        path.unlink()
+    else:
+        with sqlite3.connect(path) as db:
+            if case == "tie":
+                db.execute(
+                    "INSERT INTO sessions (id, started_at, source) "
+                    "VALUES ('tie', 86, 'kanban')"
+                )
+            else:
+                card = json.loads((exports / "card-c.json").read_text())
+                card["runs"][0]["started_at"] = 100
+                (exports / "card-c.json").write_text(json.dumps(card))
+    result = run_cli(exports, home, "--json")
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["total"]["matched_runs"] == 1
+    assert len(report["unmatched_runs"]) == 2
+    if case == "missing-db":
+        assert not path.exists()
+
+
+def test_multiple_prefixes_and_missing_values(tmp_path):
+    exports, home = make_exports(tmp_path)
+    with sqlite3.connect(home / "profiles/builder/state.db") as db:
+        db.execute("UPDATE sessions SET actual_cost_usd = NULL")
+    result = run_cli(
+        exports, home, "--prefix", "SUPPORT", "--tolerance", "16", "--json"
+    )
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    assert report["groups"]["SUPPORT"]["matched_runs"] == 1
+    assert report["groups"]["others"]["runs"] == 0
+    assert report["total"]["missing_values"]["actual_cost_usd"] == 2
+
+
+def test_hermes_command_transport_uses_explicit_board(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("chain_metrics", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {"check": True, "capture_output": True, "text": True}
+        return subprocess.CompletedProcess(command, 0, stdout='{"tasks": []}')
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module.read_kanban("example-board", None) == {"tasks": []}
+    module.read_kanban("example-board", None, "card-a")
+    assert calls == [
+        ["hermes", "kanban", "--board", "example-board", "list", "--json"],
+        ["hermes", "kanban", "--board", "example-board", "show", "card-a", "--json"],
+    ]
+
+
+def test_query_does_not_read_unneeded_session_columns(tmp_path, monkeypatch):
+    _, home = make_exports(tmp_path)
+    db_path = home / "profiles/builder/state.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute("ALTER TABLE sessions ADD COLUMN unrelated_payload TEXT")
+    spec = importlib.util.spec_from_file_location("chain_metrics", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    original_open = module.open_sessions
+
+    def restricted_open(path):
+        conn = original_open(path)
+
+        def authorize(action, table, column, database, trigger):
+            if action == sqlite3.SQLITE_READ and column == "unrelated_payload":
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        conn.set_authorizer(authorize)
+        return conn
+
+    monkeypatch.setattr(module, "open_sessions", restricted_open)
+    runs = [{"card_id": "card-a", "id": 1, "profile": "builder", "started_at": 100}]
+    matches, unmatched = module.match_sessions(runs, home, 15)
+    assert len(matches) == 1
+    assert unmatched == []
+
+
+def test_cli_runs_without_site_packages(tmp_path):
+    exports, home = make_exports(tmp_path)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            str(SCRIPT),
+            "--board",
+            "example-board",
+            "--prefix",
+            "PRODUCT-A",
+            "--hermes-home",
+            str(home),
+            "--kanban-json-dir",
+            str(exports),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["total"]["matched_runs"] == 2

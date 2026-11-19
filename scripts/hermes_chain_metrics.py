@@ -153,16 +153,22 @@ def match_sessions(runs, home, tolerance):
                     nearby.append((distance, session))
         nearby.sort(key=lambda item: item[0])
         identified = []
+        highest_rank = 0
         for distance, session in nearby:
             title = re.sub(r" #\d+$", "", session.get("title") or "").removesuffix("…")
             title_match = bool(title) and (run.get("title") or "").startswith(title)
             cwd_match = bool(session.get("cwd")) and session["cwd"] == run.get(
                 "workspace_path"
             )
-            if title_match or cwd_match:
+            # Both > title-only > cwd-only; time cannot break an identity tie.
+            rank = 2 * int(title_match) + int(cwd_match)
+            if rank > highest_rank:
+                highest_rank = rank
+                identified = [(distance, session)]
+            elif rank and rank == highest_rank:
                 identified.append((distance, session))
         if len(identified) > 1:
-            reasons[index] = "equidistant sessions"
+            reasons[index] = "ambiguous identifying sessions"
         elif len(identified) == 1:
             candidates[index] = identified[0]
         elif not nearby:

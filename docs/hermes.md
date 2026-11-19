@@ -102,16 +102,20 @@ active time is their union, and elapsed time spans the earliest start to latest
 end. Missing ends or reversed intervals are excluded and counted separately;
 ongoing runs are not extrapolated to the current time.
 
-Matching uses the nearest `source='kanban'` session start in the same profile,
-within `--tolerance` seconds (default 15, inclusive). Among in-tolerance candidates,
-the script prefers a unique identity match: the card title starts with the session
-title after stripping a trailing retry suffix (` #N`) and truncation marker (`…`),
-or the session `cwd` equals the card's `task.workspace_path`. Empty or absent
-identity fields do not match. Conflicting or multiple identity candidates remain
-unmatched (using the existing `equidistant sessions` reason); absent identity
-matches retain nearest-start matching. Identity never extends the tolerance.
-Equidistant sessions, sessions selected by multiple runs, missing databases, and
-absent candidates are reported as unmatched, never guessed. JSON includes `matches` with session IDs and time
+Matching considers `source='kanban'` sessions in the same profile within
+`--tolerance` seconds (default 15, inclusive). Identity ranks are, highest first:
+**title AND cwd > title-only > cwd-only**. A title matches when the card title
+starts with the session title after stripping a trailing retry suffix (` #N`)
+and truncation marker (`…`); cwd matches when the session `cwd` equals the card's
+`task.workspace_path`. Empty or absent identity fields do not match. Only the
+highest nonempty identity rank is considered: a unique session wins, while
+multiple sessions at that rank remain unmatched with reason
+`ambiguous identifying sessions`, regardless of time distance. Lower ranks do
+not cause ambiguity. Only when no identity matches does nearest-start matching
+apply, with an exact distance tie reported as `equidistant sessions`. Identity
+never extends the tolerance. Sessions selected by multiple runs, missing databases,
+and absent candidates are also reported as unmatched, never guessed.
+JSON includes `matches` with session IDs and time
 deltas, `unmatched_runs` with reasons, per-prefix `groups`, and `total` under
 `schema_version: 1`. All selected runs count, including retries. A blocked run has
 status or outcome `blocked`; a QA failure has a summary starting exactly `FAIL`.

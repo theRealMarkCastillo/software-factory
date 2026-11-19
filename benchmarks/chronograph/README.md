@@ -11,21 +11,30 @@ Build a working application to the **ratified specification**, not just a demo
 that returns the expected counts. This kit contains the requirements and answer
 key, not the reference implementation:
 
-- [Master spec as received](spec/00-master-spec-as-received.md).
-- [Ratified decisions](spec/01-ratified-decisions.md), which override the master
-  spec, including its excluded hooks and launch prompts.
+- [Original owner-supplied handoff](spec/00-original.md), byte-identical to the
+  source identified in [provenance.json](spec/provenance.json). A benchmarked
+  factory receives this original as its input specification.
+- [Condensed working copy](spec/00-condensed-spec.md), derived from the original
+  and used to drive the reference run, with editorial amendments interleaved;
+  it is not a verbatim copy.
+- [Ratified decisions](spec/01-ratified-decisions.md), which override both copies,
+  including the excluded hooks and launch prompts.
 - [UI contract](spec/02-ui-contract.md), including stable browser-test selectors.
 - [OpenAPI wire contract](contracts/openapi.yaml).
 - [Frozen seed](fixtures/demo-seed.json) and [oracle](fixtures/demo-seed-oracle.json):
   the shared answer key for episode counts, ledger state, conflict chains and
   temporal graph queries. Fixture-local labels are not production UUIDs; compare
   graph edges as sets, as described in the oracle.
-- [SHA256SUMS](fixtures/SHA256SUMS), binding the two JSON files byte-for-byte.
+- [Fixture SHA256SUMS](fixtures/SHA256SUMS), binding the two JSON files byte-for-byte.
+- [Spec SHA256SUMS](spec/SHA256SUMS), binding `spec/00-original.md` byte-for-byte;
+  both checksum manifests use paths relative to this kit directory.
 
-The inputs were frozen at revision
-`2697d343b0b6005a1b0c5e9575a1702e1173885b`. Contracts and fixtures are unmodified;
-only three provenance lines in the ratified decisions were neutralized. Historical
-`docs/spec/` references in these verbatim documents correspond to this kit's
+The reference-run working inputs were frozen at revision
+`2697d343b0b6005a1b0c5e9575a1702e1173885b`. Contracts and fixtures are unmodified.
+The original handoff is preserved separately without normalization. The condensed
+copy retains its reference-run body; only its eight-line preamble was relabeled.
+The ratified decisions have neutralized provenance lines and updated spec links.
+Historical `docs/spec/` references in these documents correspond to this kit's
 `spec/` directory. Referenced implementation paths describe what the participant
 must build; they are not additional files supplied by this kit.
 
@@ -33,8 +42,10 @@ Verify the answer key **from this directory** before a run:
 
 ```sh
 sha256sum -c fixtures/SHA256SUMS
+sha256sum -c spec/SHA256SUMS
 # macOS alternative:
 shasum -a 256 -c fixtures/SHA256SUMS
+shasum -a 256 -c spec/SHA256SUMS
 ```
 
 Both checksum paths resolve here without rewriting the original sums file. The

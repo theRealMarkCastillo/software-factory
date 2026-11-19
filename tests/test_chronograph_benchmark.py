@@ -101,7 +101,10 @@ def test_chronograph_benchmark_is_complete_consistent_and_public():
 
     preserved_spec = "benchmarks/chronograph/spec/00-original.md"
     config = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert config["tool"]["ruff"].get("extend-exclude") == [preserved_spec]
+    assert config["tool"]["ruff"].get("extend-exclude") == [
+        "benchmarks/chronograph/spec/00-condensed-spec.md",
+        preserved_spec,
+    ]
     assert (KIT / "spec/.gitattributes").read_bytes() == b"00-original.md -text\n"
 
     sums = {}

@@ -1,0 +1,15 @@
+{
+  "original": {
+    "file": "00-original.md",
+    "source_name": "ChronoGraph_ Master Handoff & Architecture Specification.md",
+    "sha256": "4b00410e74d5d07f500680f6d598e8e3899803207af750ea2d562cf2c062e256",
+    "source_url": "https://github.com/eidolonlabs-ai/hermes-factory/blob/c2021211962ab3def7598cdcf75d7b844b3ac5a0/benchmarks/chronograph/input/original.md",
+    "source_commit": "c2021211962ab3def7598cdcf75d7b844b3ac5a0"
+  },
+  "condensed": {
+    "file": "00-condensed-spec.md",
+    "sha256": "48d7c503ba4b7532324080876cfccd60de2d3127f0a40f1fa067ee11dfc0cb6f",
+    "derived_from": "00-original.md",
+    "relationship": "Condensed working copy used to drive the reference run; amendments interleaved; 01-ratified-decisions.md overrides both."
+  }
+}

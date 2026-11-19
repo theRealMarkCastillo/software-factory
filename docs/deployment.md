@@ -52,6 +52,38 @@ endpoint through the launcher's environment. Do not change global Docker context
 or restart services during deployment. Subject repositories keep their own Python
 environments; use `FACTORY_COVERAGE_INTERPRETER` when needed.
 
+## Deployment source exposure rule
+
+Opt-in deployment validation (`--deployment --check`) inspects **every original
+Compose file supplied with `--compose`**, before merging overrides or rewriting
+ports. Every published mapping must explicitly bind `127.0.0.1` or `::1`:
+
+```yaml
+services:
+  web:
+    image: nginx
+    ports:
+      - "127.0.0.1:8080:80"
+      - "[::1]:8081:81"
+      - target: 82
+        published: 8082
+        host_ip: "127.0.0.1"
+```
+
+Bare `8080:80` or `80`, wildcard binds (`0.0.0.0`, `::`), empty host IPs,
+non-loopback addresses, and unresolved host-IP interpolation are refused.
+Port ranges remain unsupported even when bound to loopback; only single static
+TCP targets are supported. Explicit loopback with an omitted published port is
+supported (`127.0.0.1::80`, or long syntax with `host_ip` and `target`).
+An override cannot legalize an unsafe publication in another source file.
+There is no flag, environment override, allowlist, or waiver for this rule.
+
+Refusal returns `passed: false`, stage `exposure_refused`, and per-mapping
+service/specification reasons in the result and evidence manifest, before any
+image build or container start. Successful validation still replaces the source
+ports with allocated factory-range loopback ports; it does not reuse source host
+ports. Acceptance mode is unchanged and refuses all published ports.
+
 ## Promotion
 
 1. Develop and validate generic changes in the public repository.

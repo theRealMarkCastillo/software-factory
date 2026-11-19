@@ -802,7 +802,7 @@ def assert_safe_compose_file(
 
 
 def deployment_port_target(mapping) -> int:
-    """Parse one static TCP mapping, never ranges or host-mode publication."""
+    """Parse one explicitly loopback-bound static TCP mapping; never ranges."""
 
     def port(value):
         if type(value) not in (str, int) or not re.fullmatch(r"[0-9]+", str(value)):
@@ -813,6 +813,11 @@ def deployment_port_target(mapping) -> int:
         return number
 
     if isinstance(mapping, dict):
+        if mapping.get("host_ip") not in ("127.0.0.1", "::1"):
+            raise PolicyViolation(
+                "deployment source ports require explicit loopback host_ip "
+                "127.0.0.1 or ::1"
+            )
         if set(mapping) - {
             "target",
             "published",
@@ -836,12 +841,15 @@ def deployment_port_target(mapping) -> int:
     text = str(mapping)
     if text.endswith("/tcp"):
         text = text[:-4]
-    parts = text.split(":")
-    if not 1 <= len(parts) <= 3 or "$" in text:
-        raise PolicyViolation("deployment requires a single static TCP mapping")
-    if len(parts) > 1:
-        port(parts[-2])
-    return port(parts[-1])
+    match = re.fullmatch(r"(?:127\.0\.0\.1|\[::1\]):([^:]*):([^:]+)", text)
+    if match is None:
+        raise PolicyViolation(
+            "deployment source ports require explicit loopback host IP "
+            "127.0.0.1 or [::1] and a single static TCP mapping"
+        )
+    if match[1]:
+        port(match[1])
+    return port(match[2])
 
 
 def rewrite_deployment_ports(compose_dict: dict, allocated: list[int]) -> list[dict]:

@@ -59,6 +59,7 @@ from factory.policy import (
     allocate_host_ports,
     assert_safe_compose_file,
     assert_safe_repo_root,
+    deployment_port_target,
     new_factory_project,
     rewrite_deployment_ports,
     run_compose,
@@ -413,6 +414,82 @@ def run_factory_card(
     resolved_compose = [
         _resolve_input_path(repo, f, "compose file") for f in compose_files
     ]
+    if deployment:
+        # Inspect each original file: a later override or allocated rewrite must
+        # never conceal an unsafe developer-facing publication. No gate/waiver
+        # setting can bypass this check, and refusal performs no Docker work.
+        assert yaml is not None
+        refusals = []
+        for path in resolved_compose:
+            doc = yaml.safe_load(path.read_text()) or {}
+            if not isinstance(doc, dict):
+                raise PolicyViolation(f"compose document must be a mapping: {path}")
+            for service, config in (doc.get("services") or {}).items():
+                if not isinstance(config, dict):
+                    continue  # ordinary Compose validation diagnoses this below
+                mappings = config.get("ports") or []
+                if not isinstance(mappings, list):
+                    raise PolicyViolation("deployment ports must be a list")
+                for mapping in mappings:
+                    try:
+                        deployment_port_target(mapping)
+                    except PolicyViolation as exc:
+                        refusals.append(
+                            {
+                                "file": str(path),
+                                "service": service,
+                                "spec": mapping,
+                                "reason": str(exc),
+                            }
+                        )
+        if refusals:
+            result.project_name = new_factory_project(card_id)
+            result.stage = "exposure_refused"
+            result.error = "\n".join(
+                f"{item['file']}: service {item['service']!r}, "
+                f"port {item['spec']!r}: {item['reason']}"
+                for item in refusals
+            )
+            artifacts_dir = Path(artifacts_root).expanduser() / result.project_name
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            result.artifacts_dir = str(artifacts_dir)
+            result.duration_s = time.time() - start
+            source = capture_source(repo)
+            write_evidence_manifest(
+                artifacts_dir,
+                repo,
+                entry_point=entry_point,
+                command=[],
+                mode=resolved_mode,
+                gates_run=run_gates,
+                source_start=source,
+                source_end=source,
+                base=resolve_base_info(repo, "main" if base_ref is None else base_ref),
+                runtime={
+                    "deployment": {"exposure_refusals": refusals},
+                    "teardown": {
+                        "attempted": False,
+                        "ok": False,
+                        "detail": "source exposure refused before Docker",
+                    },
+                    "safety": {
+                        "postflight": "not_run",
+                        "protected_changes": [],
+                        "unexpected_changes": [],
+                        "collateral_damage": False,
+                    },
+                },
+                card_id=card_id,
+                project_name=result.project_name,
+                execution={
+                    "exit_code": result.exit_code,
+                    "passed": False,
+                    "stage": result.stage,
+                    "error": result.error,
+                    "duration_s": round(result.duration_s, 2),
+                },
+            )
+            return result
     merged_compose = _load_compose_files(
         resolved_compose, repo_root=repo, deployment=deployment
     )

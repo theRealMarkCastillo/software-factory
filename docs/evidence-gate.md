@@ -92,6 +92,22 @@ a trusted repository executable running on the host (the same trust boundary as
 host coverage). It keeps the gates, snapshots, logs and finally-teardown.
 See the [quickstart](quickstart.md#validate-a-real-development-deployment-opt-in).
 
+Before merging or rewriting, each source `--compose` file must explicitly bind
+all published ports to `127.0.0.1` or `::1` (bracketed `[::1]` in short syntax,
+`host_ip` in long syntax). Bare ports, wildcard/empty/non-loopback addresses,
+interpolated host IPs, and port ranges are refused without a waiver. A later
+override cannot hide an unsafe mapping. The allocated loopback rewrite is
+unchanged; acceptance mode still refuses every published port.
+
+A source-port refusal returns `passed: false`, terminal stage `exposure_refused`,
+and an `error` naming each source file, service and raw mapping. The diagnostic
+manifest repeats this in `execution.error` and records structured
+`{file, service, spec, reason}` entries in
+`runtime.deployment.exposure_refusals`. Its command is empty (nothing ran),
+teardown is not attempted, and postflight is `not_run`: these are failure
+evidence, not deployment certification. No build, start, logs, or teardown
+Docker call is made on this path.
+
 In addition to ordinary schema-v2 evidence, `runtime.deployment` records:
 
 - `ports`: ordered service/target/published/host_ip records, with unique allocated

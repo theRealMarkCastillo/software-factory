@@ -43,7 +43,7 @@ def test_deployment_lifecycle(monkeypatch, tmp_path, failure, stage):
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "compose.yml").write_text(
-        'services:\n  web-api:\n    image: nginx\n    ports: ["8000:80"]\n  optional:\n    image: nginx\n    profiles: [debug]\n'
+        'services:\n  web-api:\n    image: nginx\n    ports: ["127.0.0.1:8000:80"]\n  optional:\n    image: nginx\n    profiles: [debug]\n'
     )
     script = repo / "check.sh"
     script.write_text(
@@ -160,7 +160,13 @@ def test_deployment_lifecycle(monkeypatch, tmp_path, failure, stage):
 
 
 @pytest.mark.parametrize(
-    "mapping", ["8080:80", "80", "0.0.0.0:8080:80", {"target": 80, "published": 8080}]
+    "mapping",
+    [
+        "127.0.0.1:8080:80",
+        "127.0.0.1::80",
+        "[::1]:8080:80",
+        {"target": 80, "published": 8080, "host_ip": "127.0.0.1"},
+    ],
 )
 def test_deployment_port_rewrite(mapping):
     doc = {"services": {"web": {"image": "nginx", "ports": [mapping]}}}

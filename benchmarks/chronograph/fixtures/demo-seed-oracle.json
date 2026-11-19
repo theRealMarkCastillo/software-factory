@@ -1,0 +1,1136 @@
+{
+  "fixture": "demo-seed-oracle",
+  "version": 1,
+  "notes": "Fact/episode keys are fixture-local labels; real ids are UUIDs. Graph semantics: half-open [valid_from, valid_until); status_at is the temporal status at as_of. Edge order is unspecified; compare as sets.",
+  "counts": {
+    "episodes": 4,
+    "facts": 10,
+    "active": 5,
+    "superseded": 5,
+    "chains": 4,
+    "entities": 10,
+    "neo4j": {
+      "entity_nodes": 10,
+      "relation_edges": 10,
+      "fact_nodes": 10,
+      "superseded_by_edges": 5
+    }
+  },
+  "seed_response": {
+    "status": "ok",
+    "episodes": 4,
+    "facts": 10,
+    "active": 5,
+    "superseded": 5,
+    "chains": 4,
+    "entities": 10
+  },
+  "per_episode": [
+    {
+      "episode": "E1",
+      "extracted_count": 4,
+      "conflicts_resolved_count": 0
+    },
+    {
+      "episode": "E2",
+      "extracted_count": 2,
+      "conflicts_resolved_count": 2
+    },
+    {
+      "episode": "E3",
+      "extracted_count": 2,
+      "conflicts_resolved_count": 1
+    },
+    {
+      "episode": "E4",
+      "extracted_count": 2,
+      "conflicts_resolved_count": 2
+    }
+  ],
+  "ledger_final": [
+    {
+      "key": "F1",
+      "episode": "E1",
+      "subject": "AuthCluster",
+      "predicate": "HAS_IP",
+      "object": "10.0.0.12",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2026-01-05T12:00:00Z",
+      "status": "superseded",
+      "superseded_by": "F5"
+    },
+    {
+      "key": "F2",
+      "episode": "E1",
+      "subject": "AuthCluster",
+      "predicate": "VERSION",
+      "object": "1.0.0",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2026-01-10T09:15:00Z",
+      "status": "superseded",
+      "superseded_by": "F9"
+    },
+    {
+      "key": "F3",
+      "episode": "E1",
+      "subject": "AuthCluster",
+      "predicate": "STATUS",
+      "object": "HEALTHY",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2026-01-10T08:30:00Z",
+      "status": "superseded",
+      "superseded_by": "F7"
+    },
+    {
+      "key": "F4",
+      "episode": "E1",
+      "subject": "Alice",
+      "predicate": "CURRENT_ROLE",
+      "object": "Infrastructure Lead",
+      "valid_from": "2026-01-01T00:00:00Z",
+      "valid_until": "2026-01-05T12:00:00Z",
+      "status": "superseded",
+      "superseded_by": "F6"
+    },
+    {
+      "key": "F5",
+      "episode": "E2",
+      "subject": "AuthCluster",
+      "predicate": "HAS_IP",
+      "object": "10.0.0.45",
+      "valid_from": "2026-01-05T12:00:00Z",
+      "valid_until": null,
+      "status": "active",
+      "superseded_by": null
+    },
+    {
+      "key": "F6",
+      "episode": "E2",
+      "subject": "Alice",
+      "predicate": "CURRENT_ROLE",
+      "object": "Principal Architect",
+      "valid_from": "2026-01-05T12:00:00Z",
+      "valid_until": null,
+      "status": "active",
+      "superseded_by": null
+    },
+    {
+      "key": "F7",
+      "episode": "E3",
+      "subject": "AuthCluster",
+      "predicate": "STATUS",
+      "object": "DEGRADED",
+      "valid_from": "2026-01-10T08:30:00Z",
+      "valid_until": "2026-01-10T09:15:00Z",
+      "status": "superseded",
+      "superseded_by": "F10"
+    },
+    {
+      "key": "F8",
+      "episode": "E3",
+      "subject": "AuthCluster",
+      "predicate": "ASSIGNED_TO",
+      "object": "Alice",
+      "valid_from": "2026-01-10T08:30:00Z",
+      "valid_until": null,
+      "status": "active",
+      "superseded_by": null
+    },
+    {
+      "key": "F9",
+      "episode": "E4",
+      "subject": "AuthCluster",
+      "predicate": "VERSION",
+      "object": "1.0.1",
+      "valid_from": "2026-01-10T09:15:00Z",
+      "valid_until": null,
+      "status": "active",
+      "superseded_by": null
+    },
+    {
+      "key": "F10",
+      "episode": "E4",
+      "subject": "AuthCluster",
+      "predicate": "STATUS",
+      "object": "HEALTHY",
+      "valid_from": "2026-01-10T09:15:00Z",
+      "valid_until": null,
+      "status": "active",
+      "superseded_by": null
+    }
+  ],
+  "entities": [
+    "1.0.0",
+    "1.0.1",
+    "10.0.0.12",
+    "10.0.0.45",
+    "Alice",
+    "AuthCluster",
+    "DEGRADED",
+    "HEALTHY",
+    "Infrastructure Lead",
+    "Principal Architect"
+  ],
+  "conflict_chains": [
+    {
+      "subject": "Alice",
+      "predicate": "CURRENT_ROLE",
+      "versions": [
+        {
+          "version": 1,
+          "fact": "F4",
+          "object": "Infrastructure Lead"
+        },
+        {
+          "version": 2,
+          "fact": "F6",
+          "object": "Principal Architect"
+        }
+      ]
+    },
+    {
+      "subject": "AuthCluster",
+      "predicate": "HAS_IP",
+      "versions": [
+        {
+          "version": 1,
+          "fact": "F1",
+          "object": "10.0.0.12"
+        },
+        {
+          "version": 2,
+          "fact": "F5",
+          "object": "10.0.0.45"
+        }
+      ]
+    },
+    {
+      "subject": "AuthCluster",
+      "predicate": "STATUS",
+      "versions": [
+        {
+          "version": 1,
+          "fact": "F3",
+          "object": "HEALTHY"
+        },
+        {
+          "version": 2,
+          "fact": "F7",
+          "object": "DEGRADED"
+        },
+        {
+          "version": 3,
+          "fact": "F10",
+          "object": "HEALTHY"
+        }
+      ]
+    },
+    {
+      "subject": "AuthCluster",
+      "predicate": "VERSION",
+      "versions": [
+        {
+          "version": 1,
+          "fact": "F2",
+          "object": "1.0.0"
+        },
+        {
+          "version": 2,
+          "fact": "F9",
+          "object": "1.0.1"
+        }
+      ]
+    }
+  ],
+  "graph_queries": {
+    "before_T1": {
+      "as_of": "2025-12-31T23:59:59Z",
+      "active_only": {
+        "nodes": [],
+        "edges": []
+      },
+      "include_superseded": {
+        "nodes": [],
+        "edges": []
+      }
+    },
+    "T1": {
+      "as_of": "2026-01-01T00:00:00Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "active"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "active"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T2_minus_1us": {
+      "as_of": "2026-01-05T11:59:59.999999Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "active"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "active"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T2": {
+      "as_of": "2026-01-05T12:00:00Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T3": {
+      "as_of": "2026-01-10T08:30:00Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T3_minus_1us": {
+      "as_of": "2026-01-10T08:29:59.999999Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T4": {
+      "as_of": "2026-01-10T09:15:00Z",
+      "active_only": {
+        "nodes": [
+          "1.0.1",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          },
+          {
+            "fact": "F9",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.1",
+            "status_at": "active"
+          },
+          {
+            "fact": "F10",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "1.0.1",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          },
+          {
+            "fact": "F9",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.1",
+            "status_at": "active"
+          },
+          {
+            "fact": "F10",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "T4_minus_1us": {
+      "as_of": "2026-01-10T09:14:59.999999Z",
+      "active_only": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "active"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          }
+        ]
+      }
+    },
+    "far_future": {
+      "as_of": "2099-01-01T00:00:00Z",
+      "active_only": {
+        "nodes": [
+          "1.0.1",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "HEALTHY",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          },
+          {
+            "fact": "F9",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.1",
+            "status_at": "active"
+          },
+          {
+            "fact": "F10",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          }
+        ]
+      },
+      "include_superseded": {
+        "nodes": [
+          "1.0.0",
+          "1.0.1",
+          "10.0.0.12",
+          "10.0.0.45",
+          "Alice",
+          "AuthCluster",
+          "DEGRADED",
+          "HEALTHY",
+          "Infrastructure Lead",
+          "Principal Architect"
+        ],
+        "edges": [
+          {
+            "fact": "F1",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.12",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F2",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.0",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F3",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F4",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Infrastructure Lead",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F5",
+            "source": "AuthCluster",
+            "predicate": "HAS_IP",
+            "target": "10.0.0.45",
+            "status_at": "active"
+          },
+          {
+            "fact": "F6",
+            "source": "Alice",
+            "predicate": "CURRENT_ROLE",
+            "target": "Principal Architect",
+            "status_at": "active"
+          },
+          {
+            "fact": "F7",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "DEGRADED",
+            "status_at": "superseded"
+          },
+          {
+            "fact": "F8",
+            "source": "AuthCluster",
+            "predicate": "ASSIGNED_TO",
+            "target": "Alice",
+            "status_at": "active"
+          },
+          {
+            "fact": "F9",
+            "source": "AuthCluster",
+            "predicate": "VERSION",
+            "target": "1.0.1",
+            "status_at": "active"
+          },
+          {
+            "fact": "F10",
+            "source": "AuthCluster",
+            "predicate": "STATUS",
+            "target": "HEALTHY",
+            "status_at": "active"
+          }
+        ]
+      }
+    }
+  }
+}

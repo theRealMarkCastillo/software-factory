@@ -92,8 +92,10 @@ records; it does not import the core engine or modify any Hermes database:
 
 The default home is `$HERMES_HOME`, falling back to `~/.hermes`. Each profile database
 is opened at `<home>/profiles/<profile>/state.db` using SQLite `mode=ro`. The script
-runs `hermes kanban --board B list --json` and `show ID --json` for every listed
-card, including unrelated cards in the `others` group. Prefixes are literal,
+runs `hermes kanban --board B list --json`, then `show ID --json` only for cards
+whose listed titles match a prefix. By default, groups and the total cover only
+these selected cards. Add `--include-others` to fetch unrelated cards too and
+restore the `others` group and all-card total. Prefixes are literal,
 case-sensitive title starts; the first supplied matching prefix wins. `others` is
 reserved. Completed intervals are measured in minutes: worker time is their sum,
 active time is their union, and elapsed time spans the earliest start to latest
@@ -101,11 +103,17 @@ end. Missing ends or reversed intervals are excluded and counted separately;
 ongoing runs are not extrapolated to the current time.
 
 Matching uses the nearest `source='kanban'` session start in the same profile,
-within `--tolerance` seconds (default 15, inclusive). Equidistant sessions, sessions
-selected by multiple runs, missing databases, and absent candidates are reported
-as unmatched, never guessed. JSON includes `matches` with session IDs and time
+within `--tolerance` seconds (default 15, inclusive). Among in-tolerance candidates,
+the script prefers a unique identity match: the card title starts with the session
+title after stripping a trailing retry suffix (` #N`) and truncation marker (`…`),
+or the session `cwd` equals the card's `task.workspace_path`. Empty or absent
+identity fields do not match. Conflicting or multiple identity candidates remain
+unmatched (using the existing `equidistant sessions` reason); absent identity
+matches retain nearest-start matching. Identity never extends the tolerance.
+Equidistant sessions, sessions selected by multiple runs, missing databases, and
+absent candidates are reported as unmatched, never guessed. JSON includes `matches` with session IDs and time
 deltas, `unmatched_runs` with reasons, per-prefix `groups`, and `total` under
-`schema_version: 1`. All listed runs count, including retries. A blocked run has
+`schema_version: 1`. All selected runs count, including retries. A blocked run has
 status or outcome `blocked`; a QA failure has a summary starting exactly `FAIL`.
 
 Session totals use `model`, `api_call_count`, `input_tokens`, `output_tokens`,
@@ -123,9 +131,11 @@ that an included subscription was free or that missing prices were zero.
 
 For offline use, pass `--kanban-json-dir /path/to/exports`. That directory must
 contain `list.json` (an array of cards, an object with `tasks`, or an object with
-`columns` mapping statuses to card arrays) and `<card-id>.json` for each listed
-card. Show exports contain `task` (including `title`) and `runs`. This mode never
-invokes Hermes; session databases are still read from the selected home. Tests
+`columns` mapping statuses to card arrays) and `<card-id>.json` only for selected
+cards. Non-matching cards need no show export unless `--include-others` is set.
+Show exports contain `task` (including `title` and optional `workspace_path`) and
+`runs`. This mode never invokes Hermes; session databases are still read from the
+selected home. Tests
 use generated synthetic exports and temporary SQLite databases only. Live-board
 compatibility and accounting completeness must be verified by the operator
 against their installed Hermes version before publishing benchmark figures.

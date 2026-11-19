@@ -73,10 +73,13 @@ def cards_from_listing(data):
     )
 
 
-def load_runs(board, exports, prefixes):
+def load_runs(board, exports, prefixes, include_others=False):
     runs = []
     seen_cards = set()
     for card in cards_from_listing(read_kanban(board, exports)):
+        group = next((p for p in prefixes if card["title"].startswith(p)), "others")
+        if group == "others" and not include_others:
+            continue
         card_id = card["id"]
         if not re.fullmatch(r"[A-Za-z0-9_-]+", card_id):
             raise ValueError("invalid card id")
@@ -84,10 +87,18 @@ def load_runs(board, exports, prefixes):
             continue
         seen_cards.add(card_id)
         detail = read_kanban(board, exports, card_id)
-        title = detail["task"]["title"]
-        group = next((p for p in prefixes if title.startswith(p)), "others")
+        task = detail["task"]
+        title = task["title"]
         for run in detail.get("runs", []):
-            runs.append({**run, "card_id": card_id, "title": title, "group": group})
+            runs.append(
+                {
+                    **run,
+                    "card_id": card_id,
+                    "title": title,
+                    "group": group,
+                    "workspace_path": task.get("workspace_path"),
+                }
+            )
     return runs
 
 
@@ -106,6 +117,8 @@ def match_sessions(runs, home, tolerance):
                 fields = (
                     "id",
                     "started_at",
+                    "title",
+                    "cwd",
                     "model",
                     "billing_mode",
                     "cost_status",
@@ -139,7 +152,20 @@ def match_sessions(runs, home, tolerance):
                 if distance <= tolerance:
                     nearby.append((distance, session))
         nearby.sort(key=lambda item: item[0])
-        if not nearby:
+        identified = []
+        for distance, session in nearby:
+            title = re.sub(r" #\d+$", "", session.get("title") or "").removesuffix("…")
+            title_match = bool(title) and (run.get("title") or "").startswith(title)
+            cwd_match = bool(session.get("cwd")) and session["cwd"] == run.get(
+                "workspace_path"
+            )
+            if title_match or cwd_match:
+                identified.append((distance, session))
+        if len(identified) > 1:
+            reasons[index] = "equidistant sessions"
+        elif len(identified) == 1:
+            candidates[index] = identified[0]
+        elif not nearby:
             reasons[index] = "no session within tolerance"
         elif len(nearby) > 1 and nearby[0][0] == nearby[1][0]:
             reasons[index] = "equidistant sessions"
@@ -249,6 +275,11 @@ def main(argv=None):
     parser.add_argument("--kanban-json-dir", type=Path)
     parser.add_argument("--tolerance", type=float, default=15)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--include-others",
+        action="store_true",
+        help="also fetch and report cards outside the selected prefixes",
+    )
     args = parser.parse_args(argv)
     if not math.isfinite(args.tolerance) or args.tolerance < 0:
         parser.error("--tolerance must be finite and nonnegative")
@@ -256,7 +287,9 @@ def main(argv=None):
     if any(not p or p == "others" for p in prefixes):
         parser.error("prefixes must be nonempty and must not be 'others'")
     try:
-        runs = load_runs(args.board, args.kanban_json_dir, prefixes)
+        runs = load_runs(
+            args.board, args.kanban_json_dir, prefixes, args.include_others
+        )
         matches, unmatched = match_sessions(runs, args.hermes_home, args.tolerance)
         report = {
             "schema_version": 1,
@@ -264,7 +297,7 @@ def main(argv=None):
             "tolerance_seconds": args.tolerance,
             "groups": {
                 p: rollup([r for r in runs if r["group"] == p])
-                for p in [*prefixes, "others"]
+                for p in [*prefixes, *(["others"] if args.include_others else [])]
             },
             "total": rollup(runs),
             "matches": matches,

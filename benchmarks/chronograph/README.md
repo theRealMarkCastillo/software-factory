@@ -83,20 +83,41 @@ need not sum to active wall time. Separate product work from factory repairs.
 
 ## Reference run
 
-These are the supplied measurements for this factory's reference run, not results
-reproduced by publishing this kit. Approximate durations below are **estimates**;
-counts are recorded observations. They are context, not a performance guarantee.
+These are operator-supplied measurements for this factory's reference run, not
+results reproduced by publishing this kit. Durations are **measured from Kanban
+run timestamps and rounded, not estimates**; counts are recorded observations.
+Token figures below are also recorded measurements, rounded for presentation.
+They are context, not a performance guarantee.
 
 | Measure | Reference observation |
 |---|---|
-| ChronoGraph implementation | 17 runs; approximately 3.6 h worker time (estimate) |
-| Factory fixes | 19 runs; approximately 4.5 h worker time (estimate) |
-| Active time | Approximately 6.6 h (estimate) |
-| Elapsed time | Approximately 11.75 h (estimate), including approximately 4.5 h waiting on one human decision (estimate) |
+| ChronoGraph implementation | 17 runs; approximately 3.6 h product worker time (measured, rounded) |
+| Factory fixes | 19 runs; approximately 4.5 h worker time (measured, rounded) |
+| Active time | Approximately 6.6 h (measured, rounded) |
+| Elapsed time | Approximately 11.75 h, including approximately 4.5 h waiting on one human decision (both measured, rounded) |
 | Independent reviews | 15: 14 PASS, 1 FAIL |
 | Blocks | 7 |
 | Defects found only by a real run | 2: integration tests used an already-seeded database; development ports were bound to all interfaces |
+| Workers | GPT-6.1 via subscription; 36 sessions; 1,634 model calls |
+| Recorded token usage | Approximately 128M input tokens (97% cache); approximately 477K output tokens |
+| Marginal worker cost under subscription | $0 |
+| Orchestrator | Claude Opus; approximately $35 **estimated** spend |
 
-Token and cost totals are not supplied for the reference run. This publication
-verifies kit integrity and portability; it does not rerun the application or claim
-that a new participant implementation has passed deployment acceptance.
+**API-equivalent worker costs are reconstructed from recorded token counts at
+published rates, not billed.** Using the operator-supplied
+[OpenAI standard rates for gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+of $2/M uncached input tokens, $0.10/M cached input tokens and $10/M output tokens:
+
+- **Whole run (36 worker sessions):** approximately $25 reconstructed from
+  approximately 3.82M uncached input, 124.3M cached input and 0.477M output tokens.
+  The supplied approximate ceiling is $27 because cache writes and the
+  reasoning-token split are not recorded.
+- **ChronoGraph cards only:** approximately $14 reconstructed API-equivalent cost.
+- **Without prompt caching:** approximately $261 reconstructed API-equivalent cost
+  for the whole run.
+
+These reconstructed costs are separate from the actual $0 marginal worker cost
+under subscription and the estimated orchestrator spend. This publication verifies
+kit integrity and portability; it does not reconstruct private session or billing
+records, rerun the application or claim that a new participant implementation has
+passed deployment acceptance.

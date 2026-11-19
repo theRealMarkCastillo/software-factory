@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "service": "test",
+  "command": ["python", "-B", "/factory-holdout/check.py"],
+  "files": ["check.py"]
+}

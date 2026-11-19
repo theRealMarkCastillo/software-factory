@@ -15,6 +15,7 @@ a hosted service, a general-purpose agent runtime, or a sandbox for hostile code
   The engine does not import Hermes or require a running Hermes gateway.
 - **Contribute:** see [CONTRIBUTING.md](CONTRIBUTING.md).
 - **Benchmark your factory:** build the [ChronoGraph benchmark kit](benchmarks/chronograph/).
+- **Keep acceptance tests private:** use [external holdout suites](docs/holdouts.md).
 
 ## What it does
 

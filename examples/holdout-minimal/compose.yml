@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/?n=1')"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+  test:
+    build: .
+    command: [python, visible.py]
+    depends_on:
+      app:
+        condition: service_healthy

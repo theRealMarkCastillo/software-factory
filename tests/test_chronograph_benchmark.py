@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import tomllib
 from collections import Counter
 from pathlib import Path
 
@@ -25,6 +26,15 @@ def test_chronograph_benchmark_is_complete_consistent_and_public():
     }
     assert KIT.is_dir(), "ChronoGraph benchmark kit is missing"
     assert {str(p.relative_to(KIT)) for p in KIT.rglob("*") if p.is_file()} == expected
+
+    # Source commit 2697d343b0b6005a1b0c5e9575a1702e1173885b:
+    # docs/spec/00-master-spec-as-received.md, with no sanitization needed.
+    preserved_spec = "benchmarks/chronograph/spec/00-master-spec-as-received.md"
+    assert hashlib.sha256((ROOT / preserved_spec).read_bytes()).hexdigest() == (
+        "959c4e2ce2004401b97901c533eb8c1c8e50a0eaabf690c81c1395c4b922fd96"
+    )
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert config["tool"]["ruff"].get("extend-exclude") == [preserved_spec]
 
     sums = {}
     for line in (KIT / "fixtures/SHA256SUMS").read_text().splitlines():

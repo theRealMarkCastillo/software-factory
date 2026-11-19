@@ -11,12 +11,13 @@ checkout (use an operator-controlled absolute scratch directory):
 WORK=/absolute/operator-scratch/holdout-demo
 mkdir -p "$WORK/candidate" "$WORK/private"
 cp examples/holdout-minimal/app.py examples/holdout-minimal/visible.py \
+  examples/holdout-minimal/test_app.py \
   examples/holdout-minimal/Dockerfile examples/holdout-minimal/compose.yml \
   examples/holdout-minimal/.env.example "$WORK/candidate/"
 cp examples/holdout-minimal/holdout-example/holdout.json \
   examples/holdout-minimal/holdout-example/check.py "$WORK/private/"
 git -C "$WORK/candidate" init -b main
-git -C "$WORK/candidate" add app.py visible.py Dockerfile compose.yml .env.example
+git -C "$WORK/candidate" add app.py visible.py test_app.py Dockerfile compose.yml .env.example
 git -C "$WORK/candidate" commit -m 'test: add doubling demo'
 BASE=$(git -C "$WORK/candidate" rev-parse HEAD)
 factory run --card holdout-demo --repo "$WORK/candidate" --base "$BASE" \
@@ -25,9 +26,16 @@ factory run --card holdout-demo --repo "$WORK/candidate" --base "$BASE" \
 ```
 
 Expected: visible test passes, then the independent fresh project passes all
-three holdout cases. No dependency installation is needed inside the image;
-Docker must be able to obtain `python:3.12-slim`. Both app/test services run on
-the private Compose network, with no published ports.
+three holdout cases. The factory's host interpreter needs its normal `pytest`
+and `pytest-cov` tooling (provided by the engine's locked environment); the
+coverage gate runs `test_app.py` there, not inside Docker. No image dependency
+installation is needed; Docker must be able to obtain `python:3.12-slim`.
+Both app/test services run on the private Compose network, with no published
+ports. The initial self-baseline run has no Python delta; the overfit run below
+actually exercises coverage of the changed line, without resetting `BASE`.
+Coverage measures execution, not correctness: `test_app.py` deliberately tests
+only `n=1`, so that line is covered even when it returns the wrong value for
+other inputs. Only the external holdout catches those cases.
 
 For the **overfit** variant, change `body = str(number * 2).encode()` in `app.py`
 to `body = b"2"`, then commit that exact file. Run the same command with a new

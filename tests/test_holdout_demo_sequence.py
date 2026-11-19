@@ -22,7 +22,7 @@ from factory.runner import _run_preflight_gates
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "holdout-minimal"
 
 
-def test_readme_original_base_overfit_reaches_holdout_failed(lifecycle, monkeypatch):
+def test_readme_original_base_overfit_reaches_holdout_failed(lifecycle, monkeypatch):  # noqa: F811
     repo, private, artifacts, _, _, _ = lifecycle
     # Restore real audit/coverage/datamodel gates; only Docker remains simulated.
     monkeypatch.setattr(runner, "_run_preflight_gates", _run_preflight_gates)

@@ -45,6 +45,8 @@ include = ["factory*"]
 
 [tool.ruff]
 line-length = 88
+# Preserve the as-received third-party spec verbatim.
+extend-exclude = ["benchmarks/chronograph/spec/00-master-spec-as-received.md"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]

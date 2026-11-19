@@ -1,11 +1,11 @@
-# ChronoGraph: Temporal Knowledge Graph & Fact Conflict Engine — Master Spec (as received)
+# ChronoGraph: Temporal Knowledge Graph & Fact Conflict Engine — Condensed Spec
 
-Received from Mark 2026-11-18. Preserved for traceability; markdown escape artifacts
-from the paste (`\#`, `\-`, `\|`, `\$`) normalized, content otherwise unchanged.
+This is a condensed working copy derived from `00-original.md`, used to drive the
+reference run, with editorial amendments interleaved. It is not a verbatim copy.
 
-BINDING ORDER: `docs/spec/01-ratified-decisions.md` overrides this document wherever
-they differ. Sections 6 (Claude Code hook) and 8 (launch prompts) are NOT in scope;
-see SC-15 and SC-17.
+BINDING ORDER: `01-ratified-decisions.md` overrides both this working copy and
+`00-original.md` wherever they differ. Sections 6 (Claude Code hook) and 8 (launch
+prompts) are NOT in scope; see SC-15 and SC-17.
 
 ## 1. Project Overview & Architectural Philosophy
 

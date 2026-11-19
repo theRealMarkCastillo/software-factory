@@ -3,7 +3,8 @@
 Ratified by Mark 2026-11-18 ("ratify all as proposed") from the intake record
 (the intake record). SC-21+ are
 implementation decisions recorded by the orchestrator under builder discretion; they change
-structure, not product behaviour. This file OVERRIDES `00-master-spec-as-received.md`.
+structure, not product behaviour. This file OVERRIDES both `00-original.md` and
+`00-condensed-spec.md`.
 `contracts/openapi.yaml` is the wire contract. `fixtures/` is the frozen oracle.
 
 A worker who finds a contradiction among these three sources stops and blocks with

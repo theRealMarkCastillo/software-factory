@@ -78,6 +78,72 @@ Use an explicit board for every command. For example, after verifying local help
 hermes kanban --board software-factory --help
 ```
 
+## Roll up chain time, tokens, and cost
+
+The optional stdlib-only integration script reads Kanban exports and worker session
+records; it does not import the core engine or modify any Hermes database:
+
+```sh
+.venv/bin/python scripts/hermes_chain_metrics.py --board example-board \
+  --prefix PRODUCT-A --prefix PRODUCT-B
+.venv/bin/python scripts/hermes_chain_metrics.py --board example-board \
+  --prefix PRODUCT-A --json --hermes-home /path/to/hermes-home
+```
+
+The default home is `$HERMES_HOME`, falling back to `~/.hermes`. Each profile database
+is opened at `<home>/profiles/<profile>/state.db` using SQLite `mode=ro`. The script
+runs `hermes kanban --board B list --json`, then `show ID --json` only for cards
+whose listed titles match a prefix. By default, groups and the total cover only
+these selected cards. Add `--include-others` to fetch unrelated cards too and
+restore the `others` group and all-card total. Prefixes are literal,
+case-sensitive title starts; the first supplied matching prefix wins. `others` is
+reserved. Completed intervals are measured in minutes: worker time is their sum,
+active time is their union, and elapsed time spans the earliest start to latest
+end. Missing ends or reversed intervals are excluded and counted separately;
+ongoing runs are not extrapolated to the current time.
+
+Matching considers `source='kanban'` sessions in the same profile within
+`--tolerance` seconds (default 15, inclusive). Identity ranks are, highest first:
+**title AND cwd > title-only > cwd-only**. A title matches when the card title
+starts with the session title after stripping a trailing retry suffix (` #N`)
+and truncation marker (`…`); cwd matches when the session `cwd` equals the card's
+`task.workspace_path`. Empty or absent identity fields do not match. Only the
+highest nonempty identity rank is considered: a unique session wins, while
+multiple sessions at that rank remain unmatched with reason
+`ambiguous identifying sessions`, regardless of time distance. Lower ranks do
+not cause ambiguity. Only when no identity matches does nearest-start matching
+apply, with an exact distance tie reported as `equidistant sessions`. Identity
+never extends the tolerance. Sessions selected by multiple runs, missing databases,
+and absent candidates are also reported as unmatched, never guessed.
+JSON includes `matches` with session IDs and time
+deltas, `unmatched_runs` with reasons, per-prefix `groups`, and `total` under
+`schema_version: 1`. All selected runs count, including retries. A blocked run has
+status or outcome `blocked`; a QA failure has a summary starting exactly `FAIL`.
+
+Session totals use `model`, `api_call_count`, `input_tokens`, `output_tokens`,
+`cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens`, `estimated_cost_usd`,
+`actual_cost_usd`, `billing_mode`, and `cost_status`. Missing/non-numeric counters
+and costs are counted in `missing_values`, not estimated. Sums cover matched
+sessions only, so always check matching coverage and missing values. Cache-hit
+share is cache-read tokens divided by input plus cache-read tokens (null for a
+zero denominator); cache-write and reasoning tokens are reported separately, not
+added again to that denominator. Subscription or subscription-included billing
+mode/cost status excludes both cost fields, even if stale prices exist in the
+row. The billing and status breakdowns retain these rows as subscription usage;
+no model pricing lookup is performed. Cost sums are recorded values, not a claim
+that an included subscription was free or that missing prices were zero.
+
+For offline use, pass `--kanban-json-dir /path/to/exports`. That directory must
+contain `list.json` (an array of cards, an object with `tasks`, or an object with
+`columns` mapping statuses to card arrays) and `<card-id>.json` only for selected
+cards. Non-matching cards need no show export unless `--include-others` is set.
+Show exports contain `task` (including `title` and optional `workspace_path`) and
+`runs`. This mode never invokes Hermes; session databases are still read from the
+selected home. Tests
+use generated synthetic exports and temporary SQLite databases only. Live-board
+compatibility and accounting completeness must be verified by the operator
+against their installed Hermes version before publishing benchmark figures.
+
 ## Walk through one task
 
 1. The orchestrator uses `factory-spec-intake` to capture outcome, repository,

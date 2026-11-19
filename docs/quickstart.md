@@ -56,10 +56,16 @@ file. Supply your intended diff base instead of `HEAD` when measuring changes.
 `--test-service`, and cannot disable gates. The runner writes and validates
 `compose.resolved.yml`, uses the repository as Compose's project directory, and
 runs `up -d --build --wait --wait-timeout S` (default 300 seconds). Profile-gated
-services remain inactive. Single TCP mappings only: no ranges, UDP or host mode.
-Requested IPs and host ports are discarded. Each mapping receives a unique,
-available factory-range port bound only to `127.0.0.1`; the allocator lock is
-held until teardown. All other safety rules are unchanged.
+services remain inactive. Every original source Compose file must explicitly bind
+published ports to loopback: `127.0.0.1` or `[::1]` in short syntax (`::1` as
+long-syntax `host_ip`). Only single static TCP mappings are supported: no ranges,
+UDP or host mode. Unsafe source exposure is refused before Docker, with stage
+`exposure_refused`; no flag, environment override, allowlist or waiver can bypass
+this requirement, and an override cannot legalize an unsafe source mapping.
+After source validation, the requested host port is reallocated: each mapping
+receives a unique, available factory-range port bound only to `127.0.0.1` (also
+for IPv6 loopback sources). The allocator lock is held until teardown. All other
+safety rules are unchanged.
 
 The check runs **on the host**, with repository trust, just like host coverage;
 this is not a sandbox for untrusted repository scripts. Its cwd is the repository,

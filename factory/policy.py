@@ -908,6 +908,51 @@ def _forbidden_global_flag(token: str) -> str | None:
     return None
 
 
+def holdout_override(compose_dict: dict, directory: str, repo_root: Path) -> dict:
+    """Only operator-validated holdouts may add an external read-only mount.
+
+    Validate the whole original model with ordinary default-deny policy. No
+    candidate-supplied mount gains an exemption. The returned override stays
+    private: it contains the operator's command and external path.
+    """
+    from factory.holdout import load_holdout
+
+    assert_safe_compose_file(compose_dict, repo_root=repo_root)
+    holdout = load_holdout(directory, repo_root)
+    if holdout.service not in compose_dict.get("services", {}):
+        raise PolicyViolation("holdout service is absent from Compose inputs")
+    # Candidate host binds could share writable stores across projects. Named
+    # volumes remain project-scoped under the ordinary policy (no external/name).
+    for svc in compose_dict["services"].values():
+        for vol in svc.get("volumes", []) or []:
+            if isinstance(vol, str):
+                source = vol.split(":", 1)[0]
+                read_only = vol.endswith(":ro")
+            else:
+                source = vol.get("source", "")
+                read_only = vol.get("read_only") is True
+            if ("/" in source or source.startswith(".")) and not read_only:
+                raise PolicyViolation(
+                    "holdout fresh stores require read-only host binds"
+                )
+    return {
+        "services": {
+            holdout.service: {
+                # Compose interpolates even argv arrays; preserve literal manifest argv.
+                "command": [arg.replace("$", "$$") for arg in holdout.command],
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(holdout.root).replace("$", "$$"),
+                        "target": "/factory-holdout",
+                        "read_only": True,
+                    }
+                ],
+            }
+        }
+    }
+
+
 def run_compose(
     project_name: str,
     compose_files: list[str],
@@ -976,10 +1021,11 @@ def teardown(
         compose_files,
         ["down", "--volumes", "--remove-orphans", "--timeout", "30"],
         **(
-            {"project_directory": project_directory, "deployment": True}
-            if deployment
+            {"project_directory": project_directory}
+            if project_directory is not None
             else {}
         ),
+        **({"deployment": True} if deployment else {}),
     )
 
 

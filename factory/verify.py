@@ -68,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json", action="store_true", dest="as_json", help="machine-readable output"
     )
+    parser.add_argument(
+        "--holdout",
+        help="Re-check recorded holdout digests against this external directory.",
+    )
     return parser
 
 
@@ -84,6 +88,11 @@ def render_human(result: VerificationResult) -> str:
         ]
         if result.detail:
             lines.append(f"  detail: {result.detail}")
+    holdout = result.evidence.get("holdout")
+    if holdout:
+        lines.append(
+            f"  holdout: {holdout['verification']} (exit {holdout['exit_code']})"
+        )
     failed = [check for check in result.checks if not check["ok"]]
     lines.append(f"  checks: {len(result.checks)} run, {len(failed)} failed")
     for check in result.checks:
@@ -140,7 +149,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
     if result is None:
         result = verify_evidence(
-            args.artifacts_dir, args.repo, args.candidate, args.base
+            args.artifacts_dir,
+            args.repo,
+            args.candidate,
+            args.base,
+            **({"holdout": args.holdout} if args.holdout is not None else {}),
         )
     if result.reason == "invalid_argument":
         print(f"factory-verify: error: {result.detail}", file=sys.stderr)

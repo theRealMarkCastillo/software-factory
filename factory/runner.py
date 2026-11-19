@@ -52,6 +52,7 @@ from factory.evidence import (
     resolve_base_info,
     write_evidence_manifest,
 )
+from factory.holdout import load_holdout
 from factory.policy import (
     PolicyViolation,
     ProtectedProjectSnapshot,
@@ -60,6 +61,7 @@ from factory.policy import (
     assert_safe_compose_file,
     assert_safe_repo_root,
     deployment_port_target,
+    holdout_override,
     new_factory_project,
     rewrite_deployment_ports,
     run_compose,
@@ -309,6 +311,89 @@ def _load_compose_files(
     return merged
 
 
+def _run_holdout(card_id, repo, compose_files, model, suite, run_id, timeout):
+    """A second disposable project; all potentially secret diagnostics stay private."""
+    from factory.holdout import summary_counts
+
+    block = {
+        **suite.digests,
+        "project_name": new_factory_project(card_id + "-holdout"),
+        "exit_code": None,
+        "passed": None,
+        "failed": None,
+        "duration_s": 0.0,
+        "teardown_ok": False,
+        "safety_clean": False,
+    }
+    start = time.monotonic()
+    # Validate again before creating output; runs/ may not contain symlinks.
+    current = load_holdout(str(suite.root), repo)
+    if current.digests != suite.digests:
+        return block
+    private = suite.root / "runs" / run_id
+    private.mkdir(parents=True, exist_ok=False, mode=0o700)
+    override = private / "compose.override.yml"
+    override.write_text(yaml.safe_dump(holdout_override(model, str(suite.root), repo)))
+    files = [*compose_files, str(override)]
+    project_directory = str(Path(compose_files[0]).parent)
+    before = ProtectedProjectSnapshot.capture()
+    try:
+        proc = run_compose(
+            block["project_name"],
+            files,
+            [
+                "up",
+                "--build",
+                "--abort-on-container-exit",
+                "--exit-code-from",
+                suite.service,
+                suite.service,
+            ],
+            timeout=timeout,
+            project_directory=project_directory,
+        )
+        block["exit_code"] = proc.returncode
+        (private / "stdout.log").write_text(proc.stdout or "")
+        (private / "stderr.log").write_text(proc.stderr or "")
+        block.update(summary_counts(proc.stdout or ""))
+        logs = run_compose(
+            block["project_name"],
+            files,
+            ["logs", "--no-color"],
+            timeout=60,
+            project_directory=project_directory,
+        )
+        (private / "compose.stdout.log").write_text(logs.stdout or "")
+        (private / "compose.stderr.log").write_text(logs.stderr or "")
+    except Exception as exc:  # noqa: BLE001 - never leak command/output into public evidence
+        (private / "exception.log").write_text(str(exc))
+        for name in ("stdout", "stderr"):
+            value = getattr(exc, name, "") or ""
+            if isinstance(value, bytes):
+                value = value.decode(errors="replace")
+            (private / f"{name}.log").write_text(value)
+        block["exit_code"] = 124 if isinstance(exc, subprocess.TimeoutExpired) else 125
+    finally:
+        try:
+            proc = teardown(
+                block["project_name"], files, project_directory=project_directory
+            )
+            block["teardown_ok"] = proc.returncode == 0
+            (private / "teardown.stdout.log").write_text(proc.stdout or "")
+            (private / "teardown.stderr.log").write_text(proc.stderr or "")
+        except Exception as exc:  # noqa: BLE001
+            (private / "teardown.exception.log").write_text(str(exc))
+        try:
+            after = ProtectedProjectSnapshot.capture()
+            block["safety_clean"] = not before.diff(after)
+        except Exception as exc:  # noqa: BLE001
+            (private / "snapshot.exception.log").write_text(str(exc))
+    block["duration_s"] = round(time.monotonic() - start, 3)
+    if load_holdout(str(suite.root), repo).digests != suite.digests:
+        block["exit_code"] = 125
+    return block
+
+
 def run_factory_card(
     card_id: str,
     repo_path: str,
@@ -326,6 +411,7 @@ def run_factory_card(
     deployment: bool = False,
     check: str | None = None,
     wait_timeout: int = 300,
+    holdout: str | None = None,
 ) -> RunResult:
     """
     Full sanctioned lifecycle for a factory Compose job:
@@ -362,6 +448,13 @@ def run_factory_card(
     the CLI); a disabled-gate run is visibly second-class and records
     ``gates_run: false`` / ``mode: "diagnostic"``.
     """
+    if holdout is not None:
+        if deployment:
+            raise ValueError("--holdout forbids --deployment")
+        if not run_gates:
+            raise ValueError("--holdout forbids --no-gates")
+        if mode not in (None, "acceptance"):
+            raise ValueError("--holdout forbids diagnostic mode")
     if deployment and (not check or test_service is not None):
         raise ValueError("deployment requires --check and forbids --test-service")
     if deployment and (not run_gates or mode not in (None, "deployment")):
@@ -390,6 +483,18 @@ def run_factory_card(
     # Reject a sensitive subject root before resolving any compose/env input or
     # touching Docker. This closes the repo_root=/etc reachability path.
     assert_safe_repo_root(repo)
+    holdout_suite = load_holdout(holdout, repo) if holdout is not None else None
+    if holdout_suite is not None:
+        public_root = Path(artifacts_root).expanduser().resolve()
+        if (
+            public_root.is_relative_to(holdout_suite.root)
+            or holdout_suite.root.is_relative_to(public_root)
+            or repo.is_relative_to(holdout_suite.root)
+        ):
+            raise PolicyViolation(
+                "holdout, repository and public artifacts must not overlap"
+            )
+    holdout_block = None
     check_path = None
     if deployment:
         assert check is not None
@@ -494,6 +599,8 @@ def run_factory_card(
         resolved_compose, repo_root=repo, deployment=deployment
     )
     assert_safe_compose_file(merged_compose, repo_root=repo, deployment=deployment)
+    if holdout_suite is not None:
+        holdout_override(merged_compose, str(holdout_suite.root), repo)
     if not deployment and test_service not in merged_compose.get("services", {}):
         raise PolicyViolation(
             f"test_service '{test_service}' not found in compose services: "
@@ -765,6 +872,29 @@ def run_factory_card(
         if deployment and not teardown_state["ok"]:
             terminal_stage = "deployment_teardown_failed"
 
+    if result.passed and holdout_suite is not None:
+        try:
+            holdout_block = _run_holdout(
+                card_id,
+                repo,
+                abs_compose_files,
+                merged_compose,
+                holdout_suite,
+                project_name,
+                timeout,
+            )
+            result.passed = (
+                holdout_block["exit_code"] == 0
+                and holdout_block["teardown_ok"]
+                and holdout_block["safety_clean"]
+                and not holdout_block["failed"]
+            )
+        except Exception:  # noqa: BLE001 - private diagnostics must never enter public artifacts
+            result.passed = False
+        if not result.passed:
+            terminal_stage = "holdout_failed"
+            result.error = "holdout failed (private output withheld)"
+
     # 7/8. Postflight safety verification -- this can override everything else.
     result.stage = "postflight_verification"
     try:
@@ -848,6 +978,8 @@ def run_factory_card(
                 "safety": safety,
                 **({"deployment": deployment_state} if deployment else {}),
             },
+            holdout=holdout_block,
+            holdout_required=holdout_suite is not None,
             # A passing run must carry all three logs; a failed run records
             # whichever logs exist so the failure stays diagnosable.
             artifacts=list(REQUIRED_ARTIFACTS)
@@ -1050,7 +1182,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Evidence mode. Default: acceptance when gates run, diagnostic "
         "when --no-gates is given. Diagnostic evidence can never certify.",
     )
+    parser.add_argument(
+        "--holdout",
+        help="Absolute operator-owned holdout directory outside the repo (acceptance only).",
+    )
     args = parser.parse_args(argv)
+    if args.holdout is not None:
+        if args.deployment:
+            parser.error("--holdout forbids --deployment")
+        if args.no_gates:
+            parser.error("--holdout forbids --no-gates")
+        if args.mode == "diagnostic":
+            parser.error("--holdout forbids diagnostic mode")
     if args.deployment and (not args.check or args.test_service is not None):
         parser.error("--deployment requires --check and forbids --test-service")
     if args.deployment and (args.no_gates or args.mode is not None):
@@ -1087,6 +1230,7 @@ def main(argv: list[str] | None = None) -> int:
         deployment=args.deployment,
         check=args.check,
         wait_timeout=args.wait_timeout,
+        holdout=args.holdout,
     )
     print(json.dumps(result.to_dict(), indent=2))
 

@@ -488,6 +488,8 @@ def write_evidence_manifest(
     artifacts: Iterable[str] | None = None,
     card_id: str | None = None,
     project_name: str = "",
+    holdout: dict | None = None,
+    holdout_required: bool = False,
 ) -> Path:
     """Write a schema-v2 manifest plus its ``sha256sum`` sidecar.
 
@@ -545,6 +547,11 @@ def write_evidence_manifest(
         "base": dict(base or {}),
         "engine": engine_identity(),
         "runtime": dict(runtime or {}),
+        **(
+            {"holdout_required": True, "holdout": holdout}
+            if holdout_required or holdout is not None
+            else {}
+        ),
         "artifacts": artifact_records(output_dir, declared) if declared else [],
         # legacy reader keys (same names, same meanings)
         "git_revision": start["sha"],
@@ -1144,6 +1151,23 @@ def check_evidence(manifest: dict, *, artifacts_dir: str | Path) -> EvidenceChec
         )
     accept("gates_enabled")
 
+    if "holdout_required" in manifest or "holdout" in manifest:
+        from factory.holdout import valid_record
+
+        if manifest.get("holdout_required") is not True or not valid_record(
+            manifest.get("holdout")
+        ):
+            return reject(
+                "holdout",
+                "holdout_invalid",
+                "declared holdout requires successful digest-bound evidence, teardown and safety",
+            )
+        if manifest["holdout"]["project_name"] == manifest.get("project_name"):
+            return reject(
+                "holdout", "holdout_invalid", "holdout must use a separate project"
+            )
+        accept("holdout")
+
     source = manifest["source"]
     start, end = source["start"], source["end"]
     if start["status_porcelain"] != "":
@@ -1407,6 +1431,8 @@ def verify_evidence(
     repo_path: str | Path,
     candidate: str,
     base: str,
+    *,
+    holdout: str | None = None,
 ) -> VerificationResult:
     """Read-only, offline verification of one evidence directory.
 
@@ -1529,6 +1555,27 @@ def verify_evidence(
             _evidence_summary(manifest),
         )
 
+    if holdout is not None:
+        from factory.holdout import load_holdout
+        from factory.policy import PolicyViolation
+
+        try:
+            actual = load_holdout(holdout, Path(repo_path))
+        except (PolicyViolation, OSError, ValueError):
+            return reject(
+                "holdout",
+                "holdout_digest_mismatch",
+                "holdout directory failed validation",
+            )
+        block = manifest.get("holdout") or {}
+        if any(block.get(key) != value for key, value in actual.digests.items()):
+            return reject(
+                "holdout",
+                "holdout_digest_mismatch",
+                "holdout digests differ from recorded evidence",
+            )
+        accept("holdout_digests")
+
     if manifest["source"]["sha"] != candidate:
         return reject(
             "candidate",
@@ -1639,6 +1686,12 @@ def verify_evidence(
             )
     accept("fixtures")
 
-    return VerificationResult(
-        True, "ok", "", candidate, base, checks, _evidence_summary(manifest)
-    )
+    summary = _evidence_summary(manifest)
+    if manifest.get("holdout_required"):
+        summary["holdout"] = {
+            **manifest["holdout"],
+            "verification": "reverified"
+            if holdout is not None
+            else "recorded_not_reverified",
+        }
+    return VerificationResult(True, "ok", "", candidate, base, checks, summary)

@@ -22,6 +22,14 @@ A top-level card worker owns its card lifecycle. Delegated helpers return result
 to the parent instead of mutating board state. Never clear delegation markers,
 edit a Kanban database, or change runtime permissions to bypass this boundary.
 
+For notification routing, orchestrator-created cards default to wake-only subscriptions.
+Worker events wake the orchestrator; only owner decisions and chain completion
+are delivered to the human. Keep routine progress, intermediate QA, and repair
+results in card evidence rather than human status notifications. Inspect supported
+subscription tooling and read back the effective routing after creation; do not
+invent flags, silently enable per-card human delivery, or edit runtime databases
+when an installation lacks this capability. Surface that limitation to the owner.
+
 When a task appears stuck, inspect its current state and owning worker through
 supported read-only interfaces. A timeout is not proof the worker stopped. Do not
 launch duplicate writers or retry completed work. Surface inconsistent lifecycle

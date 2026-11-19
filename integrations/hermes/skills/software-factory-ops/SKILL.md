@@ -41,6 +41,16 @@ A protected-state change requires operator review. Do not auto-retry or attempt
 to repair unrelated workloads. A failed snapshot makes safety verification
 INCONCLUSIVE. Consult the repository quickstart for current CLI limitations.
 
+## Greenfield chains and final operator smoke
+
+Read `references/greenfield-compose-chains.md` before planning a multi-service
+build chain. Its mandatory final operator-smoke card exercises the actual
+developer lifecycle on the host with real services, verifies every listener is
+loopback-only and LAN-address connections are refused, captures UI evidence where
+applicable, and leaves the stack in a documented state. Deployment-mode port
+rewriting alone cannot verify the original developer mappings or wrapper.
+Unavailable real-run paths are UNEXERCISED/INCONCLUSIVE, not acceptance passes.
+
 ## Opt-in real deployment validation
 
 Use `factory-run --deployment --check <repo-relative executable>` to validate a

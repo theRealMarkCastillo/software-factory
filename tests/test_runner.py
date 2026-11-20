@@ -26,6 +26,7 @@ BASE_SHA = "2" * 40
 def _repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / ".env.example").write_text("SETTING=example\n")
     (repo / "compose.yml").write_text(
         "services:\n  test:\n    image: python:3.11-slim\n    command: pytest -q\n"
     )

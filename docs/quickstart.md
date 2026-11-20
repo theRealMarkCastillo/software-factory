@@ -82,6 +82,8 @@ example's negative control, substitute `check-fail.sh` for `check.sh`.
 
 Provide a Git working tree, a Compose test service, and an `.env.example` describing
 the environment. Use internal service names instead of published host ports.
+The environment example is required in every mode: a missing file refuses before
+gates or Docker with `env_example_missing`; add it or pass `--env-example <path>`.
 Python projects need pytest and pytest-cov plus project dependencies in the
 interpreter used to launch the runner (or `FACTORY_COVERAGE_INTERPRETER`).
 The subject project can use any environment manager. Python environment audits

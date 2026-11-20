@@ -69,6 +69,7 @@ def test_source_exposure_refusal_records_every_mapping_before_docker(
 ):
     repo = tmp_path / "repo"
     repo.mkdir()
+    (repo / ".env.example").write_text("SETTING=example\n")
     mappings = ["8080:80", {"target": 81, "published": 8081, "host_ip": "0.0.0.0"}]
     (repo / "compose.yml").write_text(
         yaml.safe_dump(

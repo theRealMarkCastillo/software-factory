@@ -60,6 +60,7 @@ def test_runner_rejects_interpolated_security_inputs(tmp_path, monkeypatch, serv
 
 
 def _assert_rejected(tmp_path, monkeypatch, documents):
+    (tmp_path / ".env.example").write_text("SETTING=example\n")
     paths = []
     for index, doc in enumerate(documents):
         path = tmp_path / f"compose-{index}.yml"

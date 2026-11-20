@@ -5,10 +5,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test_runner import _wire_successful_run
 
 from factory import runner
 from factory.policy import ProtectedProjectSnapshot
-from test_runner import _wire_successful_run
 
 
 @pytest.fixture

@@ -159,6 +159,8 @@ and the verifier. A gate is accepted only when it matches the required fields;
 any other skip needs a documented inapplicable reason plus substantiation.
 Nothing in a manifest can add, relax, or reclassify a gate.
 
+The data-model gate scans the implicit default only when the repository root has a directory entry named exactly `spec.md`; files declared via `specs:` or `--spec` retain normal filesystem resolution and are gaps when missing.
+
 The npm audit gate covers production dependencies only, using `npm audit --json
 --audit-level moderate --omit=dev`; its result records `npm_scope: production`
 and the exact `command` argv, including in runner evidence. npm 7+ with audit

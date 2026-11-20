@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -349,6 +350,8 @@ def _cross_check_specs(
             vocab.setdefault(f, {})[name] = f in all_mutable
 
     for rel in spec_files:
+        if not explicit and rel not in os.listdir(repo):
+            continue
         spec_path = repo / rel
         if not spec_path.is_file():
             if explicit:

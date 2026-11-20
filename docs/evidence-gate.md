@@ -33,6 +33,7 @@ New fields bind the record to what actually ran:
 reported before any gate or Docker work. A run whose source changed during
 execution, whose teardown or postflight was not clean, or whose evidence cannot
 be certified by the shared checker fails with stage `evidence_enforcement`.
+Acceptance and diagnostic Compose timeouts record `run_timeout` (never certifiable), while a timeout in the separately handled holdout suite retains `holdout_failed`.
 
 When a test-classified file is measured by coverage, the anti-bypass still gates
 it like production. Failures identify it with `measured_test_file: true`; scope

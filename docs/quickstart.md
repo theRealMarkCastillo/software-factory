@@ -32,6 +32,8 @@ Inspect the JSON result and the directory it names. A successful acceptance run
 has `passed: true` and `stage: complete`. Logs, `evidence-manifest.json`, and any
 failure marker remain in that directory. A missing Docker daemon is an environment
 failure, not evidence that the workload passed.
+Pre-Docker audit, coverage, and data-model gate refusals leave `result.json` in
+the returned `artifacts_dir`, but no certifiable evidence manifest.
 
 ## Use your own project
 

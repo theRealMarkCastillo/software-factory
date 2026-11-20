@@ -120,7 +120,11 @@ def test_present_example_preserves_next_stage(subject, tmp_path, example):
     )
     assert result.stage == "audit_gate"
     assert calls == [("gate", None)]
-    assert result.artifacts_dir is None
+    assert result.artifacts_dir is not None
+    assert (
+        json.loads((Path(result.artifacts_dir) / "result.json").read_text())
+        == result.to_dict()
+    )
 
 
 def test_help_marks_example_required(capsys):

@@ -672,7 +672,13 @@ def run_factory_card(
             "and cannot certify an assembled-system claim on its own"
         )
     elif not _run_preflight_gates(repo, result, base_info):
+        artifacts_dir = Path(artifacts_root).expanduser() / project_name
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        result.artifacts_dir = str(artifacts_dir)
         result.duration_s = time.time() - start
+        (artifacts_dir / "result.json").write_text(
+            json.dumps(result.to_dict(), indent=2) + "\n"
+        )
         return result
 
     abs_compose_files = [str(p) for p in resolved_compose]

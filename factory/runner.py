@@ -840,6 +840,9 @@ def run_factory_card(
                 if isinstance(exc, subprocess.TimeoutExpired)
                 else "deployment_run_failed"
             )
+        elif isinstance(exc, subprocess.TimeoutExpired):
+            terminal_stage = "run_timeout"
+            result.error = f"run_timeout: exceeded --timeout {timeout}s: {exc}"
         # stdout/stderr) so a crashed/hung run still leaves evidence behind.
         partial_out = getattr(exc, "stdout", "") or ""
         partial_err = getattr(exc, "stderr", "") or ""

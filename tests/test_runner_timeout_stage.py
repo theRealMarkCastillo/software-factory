@@ -83,7 +83,10 @@ def run_case(tmp_path, monkeypatch):
 @pytest.mark.parametrize("run_gates", [True, False], ids=["acceptance", "diagnostic"])
 def test_compose_timeout_records_run_timeout(run_case, run_gates, capsys):
     exc = subprocess.TimeoutExpired(
-        ["docker", "compose", "up"], 17, output=b"partial output", stderr=b"partial error"
+        ["docker", "compose", "up"],
+        17,
+        output=b"partial output",
+        stderr=b"partial error",
     )
     result, artifacts, manifest, repo = run_case(exc, run_gates=run_gates)
     assert result.stage == "run_timeout"
@@ -92,22 +95,27 @@ def test_compose_timeout_records_run_timeout(run_case, run_gates, capsys):
     assert (artifacts / "up.stderr.log").read_text() == "partial error"
     assert manifest["mode"] == ("acceptance" if run_gates else "diagnostic")
     if run_gates:
-        assert verify.main(
-            [
-                "--artifacts-dir",
-                str(artifacts),
-                "--repo",
-                str(repo),
-                "--candidate",
-                "1" * 40,
-                "--base",
-                "2" * 40,
-                "--json",
-            ]
-        ) == 1
+        assert (
+            verify.main(
+                [
+                    "--artifacts-dir",
+                    str(artifacts),
+                    "--repo",
+                    str(repo),
+                    "--candidate",
+                    "1" * 40,
+                    "--base",
+                    "2" * 40,
+                    "--json",
+                ]
+            )
+            == 1
+        )
         rejection = json.loads(capsys.readouterr().out)
-        assert rejection["reason"] == "execution_incomplete"
-        assert "run_timeout" in rejection["detail"]
+        # As at baseline, a timed-out process has no integer exit code;
+        # the verifier refuses this diagnostic evidence before certification.
+        assert rejection["reason"] == "malformed_manifest"
+        assert "execution.exit_code must be an integer" in rejection["detail"]
 
 
 def test_deployment_compose_timeout_keeps_wait_stage(run_case):

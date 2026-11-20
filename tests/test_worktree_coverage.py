@@ -91,6 +91,7 @@ def test_runner_blocks_uncovered_worktree_before_docker(
         "import app\n\ndef test_x():\n    assert app.x == 1\n"
     )
     (tmp_path / "compose.yml").write_text("services:\n  test:\n    image: alpine\n")
+    (tmp_path / ".env.example").write_text("SETTING=example\n")
     _git(tmp_path, "add", ".")
     _git(
         tmp_path,

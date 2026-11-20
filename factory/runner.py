@@ -514,6 +514,30 @@ def run_factory_card(
     )
     start = time.time()
 
+    # The shared evidence structure requires this input in every run mode.
+    # Refuse before gates or host work, retaining the late check as a backstop.
+    example_path = _resolve_input_path(repo, env_example, "env example", required=False)
+    if not example_path.is_file():
+        result.project_name = new_factory_project(card_id)
+        result.stage = "env_example_missing"
+        expected = (
+            str(example_path.relative_to(repo))
+            if example_path.is_relative_to(repo)
+            else str(example_path)
+        )
+        result.error = (
+            f"Required env example missing: {expected}; "
+            "add the file or pass --env-example <path>"
+        )
+        artifacts_dir = Path(artifacts_root).expanduser() / result.project_name
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        result.artifacts_dir = str(artifacts_dir)
+        result.duration_s = time.time() - start
+        (artifacts_dir / "result.json").write_text(
+            json.dumps(result.to_dict(), indent=2) + "\n"
+        )
+        return result
+
     # 1. Static validation before anything touches Docker.
     result.stage = "validating_compose"
     resolved_compose = [
@@ -1155,7 +1179,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--env-example",
         default=".env.example",
-        help="Env example path (repo-relative by default; absolute/cwd-relative accepted).",
+        help="Required env example path "
+        "(repo-relative by default; absolute/cwd-relative accepted).",
     )
     parser.add_argument("--fixture", action="append", default=[])
     parser.add_argument("--timeout", type=int, default=900)

@@ -34,6 +34,12 @@ reported before any gate or Docker work. A run whose source changed during
 execution, whose teardown or postflight was not clean, or whose evidence cannot
 be certified by the shared checker fails with stage `evidence_enforcement`.
 
+When a test-classified file is measured by coverage, the anti-bypass still gates
+it like production. Failures identify it with `measured_test_file: true`; scope
+measurement to production modules using `[tool.coverage.run] source = [...]` in
+`pyproject.toml`, rather than omitting the test file. Omit patterns remain a gate
+failure, and test classification alone does not exempt measured code.
+
 ## Verifying evidence
 
 ```sh

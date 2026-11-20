@@ -691,11 +691,20 @@ def run_coverage_gate(
             }
         )
         if missed:
-            failures.append(
-                f"uncovered added executable line(s) {missed} in '{f}' "
-                f"(add a test that executes them, or an inline "
-                f"'{PRAGMA_MARKER}' on the same line)"
-            )
+            if f in measured_test_files:
+                table[-1]["measured_test_file"] = True
+                failures.append(
+                    f"uncovered added executable line(s) {missed}: "
+                    f"'{f}' is classified as a test file but coverage measured it, "
+                    "so it is gated like production; scope measurement to production "
+                    "code with [tool.coverage.run] source = [...] (do not omit it)"
+                )
+            else:
+                failures.append(
+                    f"uncovered added executable line(s) {missed} in '{f}' "
+                    f"(add a test that executes them, or an inline "
+                    f"'{PRAGMA_MARKER}' on the same line)"
+                )
 
     if failures:
         return _fail(

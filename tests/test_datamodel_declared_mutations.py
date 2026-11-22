@@ -288,7 +288,7 @@ def test_manifest_declared_mutations_accepted_by_real_verify_cli(tmp_path):
         [
             sys.executable,
             "-m",
-            "factory",
+            "factory.cli",
             "verify",
             "--artifacts-dir",
             str(artifacts),

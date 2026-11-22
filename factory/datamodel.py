@@ -42,16 +42,11 @@ Like factory.audit, this module returns a flat result and never raises on
 non-policy conditions, so the orchestrator can read the result without
 exception handling.
 
-Optional behavioral-spec cross-check: if a ``spec.md`` (or files listed in a
-top-level ``specs:`` key, or passed via ``--spec``) names a mutation of a known
-field that is identity/immutable rather than mutable, the gate raises a
-BLOCKING gap instead of letting the build silently infer a schema where the
-write path cannot change the value. The scan is a proximity heuristic: for each
-field mention it evaluates the *governing* mutation verb (nearest at or before
-it), so a mixed-polarity sentence -- "a revision may change the value, but must
-not change fact_id" -- flags neither half incorrectly. It is still a heuristic:
-generic field names ("value", "status") in unrelated prose can over-flag, and
-every gap should be human-reviewed.
+Optional behavioral-spec cross-check: mutation claims about identity/immutable
+fields in ``spec.md``, top-level ``specs:``, or ``--spec`` files are advisory
+warnings (FF-06). This proximity heuristic can over-flag and under-flag prose;
+structured declared mutations will replace it. Declared missing or unreadable
+spec files remain blocking gaps. Warning wording is retained for compatibility.
 """
 
 from __future__ import annotations
@@ -76,13 +71,8 @@ DATA_MODEL_FILENAME = "data-model.yml"
 # children.
 REQUIRED_TEST_KINDS = ("round_trip", "immutability", "concurrent_append")
 
-# Behavioral-spec cross-check. If a spec file names a mutation of a known
-# field that the data model does NOT place in a mutable-via-operation category
-# (i.e. it is identity or immutable), that is a BLOCKING gap -- the build must
-# not silently infer a schema where the write path cannot actually change the
-# value. The scan pairs each field with its governing mutation verb on the same
-# line. It is deliberately conservative (may over-flag, never under-flags the
-# identity/immutable case), and every gap it raises should be human-reviewed.
+# Advisory behavioral-spec cross-check: pair each field with its governing
+# mutation verb on the same line. Findings need human review, not gate failure.
 DEFAULT_SPEC_FILENAME = "spec.md"
 
 MUTATION_VERB_PATTERN = re.compile(
@@ -131,6 +121,7 @@ class DataModelGateResult:
     gaps: list = field(default_factory=list)
     detail: str = ""
     self_checks: list = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -139,6 +130,7 @@ class DataModelGateResult:
             "gaps": self.gaps,
             "detail": self.detail,
             "self_checks": self.self_checks,
+            "warnings": self.warnings,
         }
 
 
@@ -331,10 +323,14 @@ def _resolve_spec_files(doc: dict, spec_files) -> tuple[list[str], bool]:
 
 
 def _cross_check_specs(
-    repo: Path, entities: dict, spec_files: list[str], explicit: bool, gaps: list[str]
+    repo: Path,
+    entities: dict,
+    spec_files: list[str],
+    explicit: bool,
+    gaps: list[str],
+    warnings: list[str],
 ) -> None:
-    """Flag spec statements that mutate a field the data model does not allow
-    to change (identity or immutable), per the Data Model Gate's escalation."""
+    """Warn on prose mutation claims; keep deterministic file errors as gaps."""
     vocab: dict[str, dict[str, bool]] = {}
     for name, ent in entities.items():
         if not isinstance(ent, dict):
@@ -375,7 +371,7 @@ def _cross_check_specs(
                     continue  # no governing verb, or the clause is negated
                 offenders = sorted(n for n, is_mut in per_entity.items() if not is_mut)
                 for n in offenders:
-                    gaps.append(
+                    warnings.append(
                         f"spec file '{rel}' line {lineno} mutates field '{field_name}' of "
                         f"entity '{n}', but '{field_name}' is not in that entity's "
                         f"mutable-via-operation category (BLOCKING gap)"
@@ -432,10 +428,11 @@ def run_data_model_gate(
     spec_list, spec_explicit = _resolve_spec_files(doc, spec_files)
 
     gaps: list[str] = []
+    warnings: list[str] = []
     for name, ent in entities.items():
         _validate_entity(name, ent, gaps)
         _verify_test_refs(repo, name, (ent or {}).get("tests") or {}, gaps)
-    _cross_check_specs(repo, entities, spec_list, spec_explicit, gaps)
+    _cross_check_specs(repo, entities, spec_list, spec_explicit, gaps, warnings)
 
     # The gate's closing question, per entity: a green suite is not evidence a
     # write took effect; only a write-then-read probe is.
@@ -446,14 +443,20 @@ def run_data_model_gate(
             "fail",
             entities=list(entities),
             gaps=gaps,
+            warnings=warnings,
             detail=f"{len(gaps)} gap(s) found",
             self_checks=self_checks,
         )
     return DataModelGateResult(
         "pass",
         entities=list(entities),
-        detail="data model gate passed",
+        detail=(
+            f"data model gate passed ({len(warnings)} advisory spec warning(s))"
+            if warnings
+            else "data model gate passed"
+        ),
         self_checks=self_checks,
+        warnings=warnings,
     )
 
 

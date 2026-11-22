@@ -32,6 +32,7 @@ Inspect the JSON result and the directory it names. A successful acceptance run
 has `passed: true` and `stage: complete`. Logs, `evidence-manifest.json`, and any
 failure marker remain in that directory. A missing Docker daemon is an environment
 failure, not evidence that the workload passed.
+Teardown (including the separate holdout project) uses project-scoped `compose down --rmi local` to remove built images without custom tags, leaving other projects, custom-tagged images, and BuildKit cache untouched; image-removal errors retain existing down-failure handling (nonzero exit or exception fails the run, with `deployment_teardown_failed` in deployment mode or `holdout_failed` for holdout cleanup).
 Pre-Docker audit, coverage, and data-model gate refusals leave `result.json` in
 the returned `artifacts_dir`, but no certifiable evidence manifest.
 

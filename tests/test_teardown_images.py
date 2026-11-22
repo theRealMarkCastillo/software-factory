@@ -6,7 +6,6 @@ import pytest
 
 from factory import policy
 
-
 DOWN_ARGS = [
     "down",
     "--volumes",

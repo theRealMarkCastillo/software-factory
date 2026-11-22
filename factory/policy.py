@@ -1019,7 +1019,7 @@ def teardown(
     return run_compose(
         project_name,
         compose_files,
-        ["down", "--volumes", "--remove-orphans", "--timeout", "30"],
+        ["down", "--volumes", "--remove-orphans", "--rmi", "local", "--timeout", "30"],
         **(
             {"project_directory": project_directory}
             if project_directory is not None

@@ -1,6 +1,7 @@
 """Structured spec claims: binding examples and public CLI regressions."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -263,6 +264,75 @@ def test_spec_read_once_for_prose_and_block(tmp_path, monkeypatch):
     assert result.to_dict()["declared_mutations"]["spec"] == {
         "orders": {"edit": ["value"]}
     }
+
+
+@pytest.mark.parametrize("entrypoint", ["api", "cli"])
+@pytest.mark.parametrize("with_prose", [False, True])
+@pytest.mark.parametrize(
+    "model_yaml",
+    [
+        "switches: {toggle: [label, on]}",
+        "yes: {toggle: [label]}\nswitches: {toggle: [label]}",
+        "orders: {edit: [value, 2]}",
+    ],
+    ids=["boolean-field", "boolean-entity", "integer-field"],
+)
+def test_yaml_scalars_without_block_keep_legacy_result(
+    tmp_path, entrypoint, with_prose, model_yaml
+):
+    repo = make_repo(
+        tmp_path,
+        yaml.safe_load(model_yaml),
+        {"spec.md": "A catalog of records.\n"} if with_prose else None,
+    )
+    if entrypoint == "api":
+        result = run_data_model_gate(str(repo)).to_dict()
+    else:
+        process = subprocess.run(
+            [sys.executable, "-m", "factory.datamodel", "--repo", str(repo)],
+            capture_output=True,
+            text=True,
+        )
+        assert process.returncode == 0, (process.stdout, process.stderr)
+        result = json.loads(process.stdout)
+    assert result["status"] == "pass"
+    assert result["warnings"] == []
+    assert result["detail"] == "data model gate passed"
+    assert result["declared_mutations"]["spec"] is None
+    assert result["gaps"] == []
+    json.dumps(result)
+
+
+@pytest.mark.parametrize("claims", [{"switches": {"toggle": ["label"]}}, {}])
+def test_yaml_scalars_with_block_are_deterministic(tmp_path, claims):
+    repo = make_repo(
+        tmp_path,
+        yaml.safe_load("switches: {toggle: [label, on]}"),
+        {"spec.md": block(claims)},
+    )
+    result = run_data_model_gate(str(repo)).to_dict()
+    assert result["status"] == "pass"
+    assert result["gaps"] == []
+    assert result["declared_mutations"] == {
+        "spec": claims,
+        "model": {"switches": {"toggle": [True, "label"]}},
+    }
+    assert result["warnings"] == [
+        "spec-mutations W1: model operation 'switches.toggle' or fields "
+        + ("[True]" if claims else "[True, 'label']")
+        + " are not claimed by the spec"
+    ]
+    expected = json.dumps(result)
+    assert json.dumps(run_data_model_gate(str(repo)).to_dict()) == expected
+    for seed in ("0", "73"):
+        process = subprocess.run(
+            [sys.executable, "-m", "factory.datamodel", "--repo", str(repo)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert process.returncode == 0, (process.stdout, process.stderr)
+        assert json.loads(process.stdout) == result
 
 
 def test_manifest_declared_mutations_accepted_by_real_verify_cli(tmp_path):

@@ -57,6 +57,7 @@ def test_uncovered_production_message_is_unchanged(measured_repo):
     assert result.passed is False
     assert result.detail == (
         "uncovered added executable line(s) [4] in 'app.py' "
-        "(add a test that executes them, or an inline '# pragma: no cover' on the same line)"
+        "(add a test that executes them; an inline "
+        "'# pragma: no cover' waiver needs reviewer justification)"
     )
     assert all("measured_test_file" not in entry for entry in result.files)

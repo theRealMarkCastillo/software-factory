@@ -42,16 +42,18 @@ Like factory.audit, this module returns a flat result and never raises on
 non-policy conditions, so the orchestrator can read the result without
 exception handling.
 
-Optional behavioral-spec cross-check: mutation claims about identity/immutable
-fields in ``spec.md``, top-level ``specs:``, or ``--spec`` files are advisory
-warnings (FF-06). This proximity heuristic can over-flag and under-flag prose;
-structured declared mutations will replace it. Declared missing or unreadable
-spec files remain blocking gaps. Warning wording is retained for compatibility.
+Optional behavioral-spec cross-check: structured ``yaml factory-mutations``
+blocks are exact claims checked against the model's allowed writes. Prose
+mutation claims in ``spec.md``, top-level ``specs:``, or ``--spec`` files remain
+advisory warnings (FF-06). Declared missing or unreadable spec files remain
+blocking gaps. Prose warning wording is retained for compatibility.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
+import datetime
 import json
 import os
 import re
@@ -122,6 +124,9 @@ class DataModelGateResult:
     detail: str = ""
     self_checks: list = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    declared_mutations: dict = field(
+        default_factory=lambda: {"spec": None, "model": {}}
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -131,6 +136,7 @@ class DataModelGateResult:
             "detail": self.detail,
             "self_checks": self.self_checks,
             "warnings": self.warnings,
+            "declared_mutations": self.declared_mutations,
         }
 
 
@@ -329,8 +335,9 @@ def _cross_check_specs(
     explicit: bool,
     gaps: list[str],
     warnings: list[str],
+    spec_texts: dict[str, str] | None = None,
 ) -> None:
-    """Warn on prose mutation claims; keep deterministic file errors as gaps."""
+    """Warn on prose claims; optionally retain each read for structured parsing."""
     vocab: dict[str, dict[str, bool]] = {}
     for name, ent in entities.items():
         if not isinstance(ent, dict):
@@ -358,6 +365,8 @@ def _cross_check_specs(
         except OSError as exc:  # pragma: no cover - defensive
             gaps.append(f"cannot read spec file '{rel}': {exc}")
             continue
+        if spec_texts is not None:
+            spec_texts[rel] = text
         for lineno, line in enumerate(text.splitlines(), 1):
             verbs = _mutation_verbs(line)
             if not verbs:
@@ -376,6 +385,157 @@ def _cross_check_specs(
                         f"entity '{n}', but '{field_name}' is not in that entity's "
                         f"mutable-via-operation category (BLOCKING gap)"
                     )
+
+
+def _canon_name(value) -> str:
+    """Canonical strings for structured names only, never the legacy prose scan."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return "base64:" + base64.b64encode(value).decode("ascii")
+    return str(value)
+
+
+def _normalize_mutations(mutations: dict) -> dict:
+    merged: dict = {}
+    for name, ops in mutations.items():
+        target = merged.setdefault(_canon_name(name), {})
+        for op, fields in ops.items():
+            target.setdefault(_canon_name(op), set()).update(
+                _canon_name(field) for field in fields
+            )
+    return {
+        name: {op: sorted(fields) for op, fields in sorted(ops.items())}
+        for name, ops in sorted(merged.items())
+    }
+
+
+def _parse_mutation_block(text: str) -> dict:
+    """Accept only entity -> operation -> list of field names."""
+    claims = yaml.safe_load(text)
+    if not isinstance(claims, dict):
+        raise ValueError("expected an entity mapping")
+    for ops in claims.values():
+        if not isinstance(ops, dict):
+            raise ValueError("expected entity names mapped to operation mappings")
+        for fields in ops.values():
+            if not isinstance(fields, list) or any(
+                isinstance(f, (dict, list, set)) for f in fields
+            ):
+                raise ValueError(
+                    "expected operation names mapped to lists of field names"
+                )
+    return _normalize_mutations(claims)
+
+
+def _scan_mutation_blocks(text: str, rel: str, gaps: list[str]) -> tuple[dict, bool]:
+    """Track every fence, so examples inside other fences stay literal content."""
+    claims: dict = {}
+    fence = None
+    selected = False
+    present = False
+    content: list[str] = []
+    start = 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if fence is not None:
+            closing = re.fullmatch(r" {0,3}(`{3,}|~{3,})[ \t]*", line)
+            if closing and closing[1][0] == fence[0] and len(closing[1]) >= len(fence):
+                if selected:
+                    try:
+                        block = _parse_mutation_block("\n".join(content))
+                    except (yaml.YAMLError, ValueError) as exc:
+                        gaps.append(
+                            f"spec-mutations block error: '{rel}' line {start}: {exc}"
+                        )
+                    else:
+                        for name, ops in block.items():
+                            target = claims.setdefault(name, {})
+                            for op, fields in ops.items():
+                                target.setdefault(op, []).extend(fields)
+                fence = None
+            elif selected:
+                content.append(line)
+            continue
+        opening = re.fullmatch(r" {0,3}(`{3,}|~{3,})(.*)", line)
+        if not opening or (opening[1][0] == "`" and "`" in opening[2]):
+            continue
+        fence = opening[1]
+        selected = opening[2].split()[:2] == ["yaml", "factory-mutations"]
+        present |= selected
+        content = []
+        start = lineno
+    if fence is not None and selected:
+        gaps.append(
+            f"spec-mutations block error: '{rel}' line {start}: unterminated fence"
+        )
+    return claims, present
+
+
+def _declared_spec_mutations(spec_texts: dict[str, str], gaps: list[str]):
+    claims: dict = {}
+    present = False
+    for rel, text in spec_texts.items():
+        block_claims, found = _scan_mutation_blocks(text, rel, gaps)
+        present |= found
+        for name, ops in block_claims.items():
+            target = claims.setdefault(name, {})
+            for op, fields in ops.items():
+                target.setdefault(op, []).extend(fields)
+    return _normalize_mutations(claims), present
+
+
+def _compare_mutations(entities, model, spec, gaps, warnings):
+    """Exact claims only: prose never contributes to these blocking verdicts."""
+    canonical_entities: dict = {}
+    for raw_name, ent in entities.items():
+        target = canonical_entities.setdefault(_canon_name(raw_name), set())
+        if isinstance(ent, dict):
+            target.update(
+                _canon_name(field)
+                for category in ("identity", "immutable")
+                for field in (_as_list(ent.get(category)) or [])
+            )
+    for name, ops in spec.items():
+        if name not in canonical_entities:
+            gaps.append(f"spec-mutations G1: unknown entity '{name}'")
+            continue
+        allowed = model.get(name, {})
+        protected = canonical_entities[name]
+        if not ops and allowed:
+            gaps.append(
+                f"spec-mutations G4: entity '{name}' declares no mutations "
+                "but the model allows operations"
+            )
+        for op, fields in ops.items():
+            forbidden = sorted(set(fields) & protected)
+            if forbidden:
+                gaps.append(
+                    f"spec-mutations G2: '{name}.{op}' claims identity/immutable "
+                    f"fields {forbidden}"
+                )
+            extra = sorted(set(fields) - set(allowed.get(op, [])))
+            if op not in allowed or extra:
+                gaps.append(
+                    f"spec-mutations G3: '{name}.{op}' is not allowed by the model "
+                    f"or claims unallowed fields {extra}"
+                )
+    for name, allowed in model.items():
+        if name in spec and not spec[name]:
+            continue  # Explicit never-mutated claim is G4, not W1.
+        claimed = spec.get(name, {})
+        for op, fields in allowed.items():
+            unclaimed = sorted(set(fields) - set(claimed.get(op, [])))
+            if op not in claimed or unclaimed:
+                warnings.append(
+                    f"spec-mutations W1: model operation '{name}.{op}' or fields "
+                    f"{unclaimed} are not claimed by the spec"
+                )
 
 
 def run_data_model_gate(
@@ -432,7 +592,29 @@ def run_data_model_gate(
     for name, ent in entities.items():
         _validate_entity(name, ent, gaps)
         _verify_test_refs(repo, name, (ent or {}).get("tests") or {}, gaps)
-    _cross_check_specs(repo, entities, spec_list, spec_explicit, gaps, warnings)
+    spec_texts: dict[str, str] = {}
+    _cross_check_specs(
+        repo, entities, spec_list, spec_explicit, gaps, warnings, spec_texts
+    )
+    spec_mutations, present = _declared_spec_mutations(spec_texts, gaps)
+    model_mutations = _normalize_mutations(
+        {
+            name: {
+                op: _as_list(fields) or []
+                for op, fields in (ent.get("mutable") or {}).items()
+            }
+            for name, ent in entities.items()
+            if isinstance(ent, dict) and isinstance(ent.get("mutable") or {}, dict)
+        }
+    )
+    declared_mutations = {
+        "spec": spec_mutations if present else None,
+        "model": model_mutations,
+    }
+    if present:
+        _compare_mutations(entities, model_mutations, spec_mutations, gaps, warnings)
+    elif doc.get("spec_mutations") == "required":
+        gaps.append("spec-mutations W2: spec mutations required but none declared")
 
     # The gate's closing question, per entity: a green suite is not evidence a
     # write took effect; only a write-then-read probe is.
@@ -446,6 +628,7 @@ def run_data_model_gate(
             warnings=warnings,
             detail=f"{len(gaps)} gap(s) found",
             self_checks=self_checks,
+            declared_mutations=declared_mutations,
         )
     return DataModelGateResult(
         "pass",
@@ -457,6 +640,7 @@ def run_data_model_gate(
         ),
         self_checks=self_checks,
         warnings=warnings,
+        declared_mutations=declared_mutations,
     )
 
 

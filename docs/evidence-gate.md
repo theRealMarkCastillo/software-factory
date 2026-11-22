@@ -171,13 +171,74 @@ The data-model gate scans the implicit default only when the repository root has
 The prose mutation-claim scan is **ADVISORY**: its findings are serialized in
 `datamodel.warnings`, not `gaps`, and do not change gate status or CLI exit codes.
 Owner decision FF-06 recognizes that this heuristic can both over-flag and
-under-flag prose; structured declared mutations will replace it. Finding wording
+under-flag prose; structured declared mutations provide exact enforcement.
+Finding wording
 is unchanged (including the legacy `BLOCKING gap` suffix), but the warnings are
 not blocking. With warnings and no gaps, the gate passes with detail
 `data model gate passed (<n> advisory spec warning(s))`. Missing declared specs
 and unreadable specs remain blocking gaps, as do structural entity, field, and
 test-reference checks. The runner preserves warnings in the manifest; evidence
 verification continues to use gate status, not warnings.
+
+### Structured spec mutations
+
+Place normative write claims alongside their prose in any spec the gate reads:
+
+````markdown
+```yaml factory-mutations
+orders:
+  edit: [value, revision]
+notes: {}
+```
+````
+
+The shape is `entity -> operation -> [field names]`, matching each entity's
+`mutable:` mapping in `data-model.yml`. An entity mapped to `{}` explicitly
+claims it is never mutated. An empty top-level mapping is a present declaration
+with no entity claims, not a missing block. Multiple blocks, including blocks in
+different spec files, union their entities, operations and fields.
+
+Only fences whose first two info-string words are `yaml factory-mutations`
+are declarations; extra attributes such as `title=x` are allowed. Backtick and
+tilde fences of at least three characters, with up to three leading spaces,
+are supported. The closing fence uses the same character and at least the
+opening length. A declaration-looking line inside another fence is literal
+content, not a declaration. Four-space-indented fences are code, not blocks.
+Malformed YAML, wrong-shaped declarations and unterminated declaration fences
+are blocking `spec-mutations block error:` gaps.
+
+When a structured declaration S is present, it is compared exactly with the
+model's allowed mutations D:
+
+| Prefix | Verdict |
+| --- | --- |
+| `spec-mutations G1:` | Gap: S names an entity absent from the model. |
+| `spec-mutations G2:` | Gap: S claims an identity or immutable field. |
+| `spec-mutations G3:` | Gap: S claims an operation absent from D, or a field outside that operation's allowed list. |
+| `spec-mutations G4:` | Gap: S declares an entity `{}`, but D allows operations for it. |
+| `spec-mutations W1:` | Advisory: D allows an operation or field not claimed by S, including entities absent from S. Explicit `{}` claims use G4 instead, not W1. |
+
+W1 is emitted only when S is present. The prose scan remains unchanged and
+advisory even when S exists; it does not infer structured claims.
+
+For migration, first add a block to the spec. Optionally set the top-level
+`spec_mutations: required` key in `data-model.yml` to require declarations.
+The default (key absent or `optional`) adds **no warning** when no block exists;
+legacy `warnings` and `detail` stay unchanged. In required mode, a missing block
+is the gap `spec-mutations W2: spec mutations required but none declared`.
+
+The gate result, including `datamodel` in the evidence manifest, records
+`declared_mutations: {"spec": S, "model": D}`. Entity and operation keys are
+sorted, and field lists are sorted and deduplicated. Names in both declarations
+are canonical strings: strings stay unchanged, booleans use `true`/`false`, null
+uses `null`, dates and datetimes use ISO format, bytes use `base64:` plus Base64,
+and other scalars use `str`; sorting is lexicographic. Canonical-name collisions
+(such as YAML `yes` and string `"true"`) merge by union of operations and fields.
+Structural validation and the legacy prose scan still use the original values.
+With no block, `spec` is
+JSON `null` (not `{}`), so missing declarations remain visible without warning
+noise. The evidence checker and `factory verify` accept this additional field;
+it does not change their revision, integrity or gate-status checks.
 
 The npm audit gate covers production dependencies only, using `npm audit --json
 --audit-level moderate --omit=dev`; its result records `npm_scope: production`

@@ -108,6 +108,37 @@ def test_installed_cli_policy_refusal(subject, recording_docker, tmp_path, comma
     assert not recording_docker.exists()
 
 
+@pytest.mark.parametrize("command", ["factory-run", "factory"])
+def test_installed_cli_snapshot_failure_propagates(
+    subject, recording_docker, tmp_path, command
+):
+    repo, _, _ = subject
+    (repo / "compose.yml").write_text(
+        "services:\n  test:\n    image: example:test\n    environment: {A: b}\n"
+    )
+    executable = Path(sys.executable).parent / command
+    argv = [str(executable)] + (["run"] if command == "factory" else [])
+    completed = subprocess.run(
+        argv + _argv(repo, tmp_path), capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 1
+    calls = recording_docker.read_text().splitlines()
+    assert len(calls) == 1
+    assert calls[0].startswith("ps ")
+    result = json.loads(completed.stdout) if completed.stdout else {}
+    assert result.get("stage") != "policy_violation"
+    directories = list((tmp_path / "artifacts").glob("factory-*"))
+    assert len(directories) == 1
+    for directory in directories:
+        result_path = directory / "result.json"
+        if result_path.exists():
+            assert json.loads(result_path.read_text())["project_name"] == directory.name
+    assert completed.stdout == ""
+    assert "Traceback" in completed.stderr
+    assert "PolicyViolation: could not snapshot docker state:" in completed.stderr
+    assert list(directories[0].iterdir()) == []
+
+
 def test_cli_deployment_policy_mode(subject, recording_docker, tmp_path, capsys):
     repo, _, _ = subject
     check = repo / "check.sh"

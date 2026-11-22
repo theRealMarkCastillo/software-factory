@@ -139,6 +139,58 @@ def test_installed_cli_snapshot_failure_propagates(
     assert list(directories[0].iterdir()) == []
 
 
+def test_library_static_refusal_marks_original_project(
+    subject, recording_docker, tmp_path, monkeypatch, capsys
+):
+    repo, _, _ = subject
+    (repo / "compose.yml").write_text(
+        "services:\n  test:\n    image: example:test\n    privileged: true\n"
+    )
+    projects = []
+
+    def project(card):
+        name = f"factory-{card}-{len(projects)}"
+        projects.append(name)
+        return name
+
+    monkeypatch.setattr(runner, "new_factory_project", project)
+    with pytest.raises(policy.PolicyViolation) as refusal:
+        runner.run_factory_card("regression", str(repo), ["compose.yml"])
+    assert isinstance(refusal.value, runner.PreDockerPolicyViolation)
+    assert refusal.value.project_name == projects[0]
+    assert isinstance(refusal.value.__cause__, policy.PolicyViolation)
+    assert refusal.value.args == refusal.value.__cause__.args
+    assert str(refusal.value) == str(refusal.value.__cause__)
+    assert runner.main(_argv(repo, tmp_path)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert projects == ["factory-regression-0", "factory-regression-1"]
+    assert result["project_name"] == projects[1]
+    assert Path(result["artifacts_dir"]).name == projects[1]
+    assert not recording_docker.exists()
+
+
+def test_cli_sensitive_env_refusal_in_home_checkout(
+    subject, recording_docker, tmp_path, monkeypatch, capsys
+):
+    repo, _, _ = subject
+    # Model a home checkout without depending on the real host's home layout.
+    monkeypatch.setattr(policy, "_is_home_checkout", lambda root: root == repo)
+    (repo / ".env").write_text("EXAMPLE=local\n")
+    (repo / "compose.yml").write_text(
+        'services:\n  test:\n    image: example:test\n'
+        '    volumes: ["./.env:/app/.env"]\n'
+    )
+    assert runner.main(_argv(repo, tmp_path)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["stage"] == "policy_violation"
+    assert "mounting sensitive repository path './.env'" in result["error"]
+    artifacts = Path(result["artifacts_dir"])
+    assert artifacts.name == result["project_name"]
+    assert json.loads((artifacts / "result.json").read_text()) == result
+    assert list(artifacts.parent.glob("factory-*")) == [artifacts]
+    assert not recording_docker.exists()
+
+
 def test_cli_deployment_policy_mode(subject, recording_docker, tmp_path, capsys):
     repo, _, _ = subject
     check = repo / "check.sh"

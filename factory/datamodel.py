@@ -52,6 +52,8 @@ blocking gaps. Prose warning wording is retained for compatibility.
 from __future__ import annotations
 
 import argparse
+import base64
+import datetime
 import json
 import os
 import re
@@ -385,22 +387,32 @@ def _cross_check_specs(
                     )
 
 
-def _mutation_sort_key(value) -> tuple[str, str]:
-    """Order raw YAML scalars without comparing incompatible Python types."""
-    return type(value).__name__, str(value)
+def _canon_name(value) -> str:
+    """Canonical strings for structured names only, never the legacy prose scan."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return "base64:" + base64.b64encode(value).decode("ascii")
+    return str(value)
 
 
 def _normalize_mutations(mutations: dict) -> dict:
-    return {
-        name: {
-            op: sorted(set(fields), key=_mutation_sort_key)
-            for op, fields in sorted(
-                ops.items(), key=lambda item: _mutation_sort_key(item[0])
+    merged: dict = {}
+    for name, ops in mutations.items():
+        target = merged.setdefault(_canon_name(name), {})
+        for op, fields in ops.items():
+            target.setdefault(_canon_name(op), set()).update(
+                _canon_name(field) for field in fields
             )
-        }
-        for name, ops in sorted(
-            mutations.items(), key=lambda item: _mutation_sort_key(item[0])
-        )
+    return {
+        name: {op: sorted(fields) for op, fields in sorted(ops.items())}
+        for name, ops in sorted(merged.items())
     }
 
 
@@ -409,19 +421,17 @@ def _parse_mutation_block(text: str) -> dict:
     claims = yaml.safe_load(text)
     if not isinstance(claims, dict):
         raise ValueError("expected an entity mapping")
-    for name, ops in claims.items():
-        if not isinstance(name, str) or not isinstance(ops, dict):
+    for ops in claims.values():
+        if not isinstance(ops, dict):
             raise ValueError("expected entity names mapped to operation mappings")
-        for op, fields in ops.items():
-            if (
-                not isinstance(op, str)
-                or not isinstance(fields, list)
-                or any(not isinstance(f, str) for f in fields)
+        for fields in ops.values():
+            if not isinstance(fields, list) or any(
+                isinstance(f, (dict, list, set)) for f in fields
             ):
                 raise ValueError(
                     "expected operation names mapped to lists of field names"
                 )
-    return claims
+    return _normalize_mutations(claims)
 
 
 def _scan_mutation_blocks(text: str, rel: str, gaps: list[str]) -> tuple[dict, bool]:
@@ -482,17 +492,21 @@ def _declared_spec_mutations(spec_texts: dict[str, str], gaps: list[str]):
 
 def _compare_mutations(entities, model, spec, gaps, warnings):
     """Exact claims only: prose never contributes to these blocking verdicts."""
+    canonical_entities: dict = {}
+    for raw_name, ent in entities.items():
+        target = canonical_entities.setdefault(_canon_name(raw_name), set())
+        if isinstance(ent, dict):
+            target.update(
+                _canon_name(field)
+                for category in ("identity", "immutable")
+                for field in (_as_list(ent.get(category)) or [])
+            )
     for name, ops in spec.items():
-        if name not in entities:
+        if name not in canonical_entities:
             gaps.append(f"spec-mutations G1: unknown entity '{name}'")
             continue
-        ent = entities[name]
-        if not isinstance(ent, dict):
-            continue  # Structural validation already rejects this entity.
         allowed = model.get(name, {})
-        protected = set(_as_list(ent.get("identity")) or []) | set(
-            _as_list(ent.get("immutable")) or []
-        )
+        protected = canonical_entities[name]
         if not ops and allowed:
             gaps.append(
                 f"spec-mutations G4: entity '{name}' declares no mutations "
@@ -516,9 +530,7 @@ def _compare_mutations(entities, model, spec, gaps, warnings):
             continue  # Explicit never-mutated claim is G4, not W1.
         claimed = spec.get(name, {})
         for op, fields in allowed.items():
-            unclaimed = sorted(
-                set(fields) - set(claimed.get(op, [])), key=_mutation_sort_key
-            )
+            unclaimed = sorted(set(fields) - set(claimed.get(op, [])))
             if op not in claimed or unclaimed:
                 warnings.append(
                     f"spec-mutations W1: model operation '{name}.{op}' or fields "

@@ -229,7 +229,13 @@ is the gap `spec-mutations W2: spec mutations required but none declared`.
 
 The gate result, including `datamodel` in the evidence manifest, records
 `declared_mutations: {"spec": S, "model": D}`. Entity and operation keys are
-sorted, and field lists are sorted and deduplicated. With no block, `spec` is
+sorted, and field lists are sorted and deduplicated. Names in both declarations
+are canonical strings: strings stay unchanged, booleans use `true`/`false`, null
+uses `null`, dates and datetimes use ISO format, bytes use `base64:` plus Base64,
+and other scalars use `str`; sorting is lexicographic. Canonical-name collisions
+(such as YAML `yes` and string `"true"`) merge by union of operations and fields.
+Structural validation and the legacy prose scan still use the original values.
+With no block, `spec` is
 JSON `null` (not `{}`), so missing declarations remain visible without warning
 noise. The evidence checker and `factory verify` accept this additional field;
 it does not change their revision, integrity or gate-status checks.

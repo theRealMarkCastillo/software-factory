@@ -152,8 +152,8 @@ def test_spec_mutating_identity_field_is_blocking(tmp_path):
         tmp_path, _valid_files(spec_text="A correction may change the fact_id field.\n")
     )
     r = run_data_model_gate(str(repo))
-    assert r.status == "fail"
-    assert any("fact_id" in g and "mutable-via-operation" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("fact_id" in g and "mutable-via-operation" in g for g in r.warnings)
 
 
 def test_spec_mutating_immutable_field_is_blocking(tmp_path):
@@ -161,8 +161,8 @@ def test_spec_mutating_immutable_field_is_blocking(tmp_path):
         tmp_path, _valid_files(spec_text="Users may edit the created_at field.\n")
     )
     r = run_data_model_gate(str(repo))
-    assert r.status == "fail"
-    assert any("created_at" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("created_at" in g for g in r.warnings)
 
 
 def test_spec_mutating_mutable_field_is_ok(tmp_path):
@@ -202,8 +202,8 @@ def test_declared_spec_file_is_cross_checked(tmp_path):
     files["docs/behavior.md"] = "A revision may change the fact_id field.\n"
     repo = _repo(tmp_path, files)
     r = run_data_model_gate(str(repo))
-    assert r.status == "fail"
-    assert any("fact_id" in g and "docs/behavior.md" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("fact_id" in g and "docs/behavior.md" in g for g in r.warnings)
 
 
 def test_no_spec_present_still_passes(tmp_path):
@@ -217,8 +217,8 @@ def test_spec_via_cli_flag(tmp_path):
     files["docs/behavior.md"] = "A revision may change the fact_id field.\n"
     repo = _repo(tmp_path, files)
     r = run_data_model_gate(str(repo), spec_files=["docs/behavior.md"])
-    assert r.status == "fail"
-    assert any("fact_id" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("fact_id" in g for g in r.warnings)
 
 
 def test_spec_mixed_polarity_sentence_flags_neither_half(tmp_path):
@@ -240,8 +240,8 @@ def test_spec_flags_identity_when_verb_follows_field(tmp_path):
         _valid_files(spec_text="The fact_id may be changed by a correction.\n"),
     )
     r = run_data_model_gate(str(repo))
-    assert r.status == "fail"
-    assert any("fact_id" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("fact_id" in g for g in r.warnings)
 
 
 def test_spec_plural_nouns_are_matched(tmp_path):
@@ -249,8 +249,8 @@ def test_spec_plural_nouns_are_matched(tmp_path):
         tmp_path, _valid_files(spec_text="Corrections rewrite the created_at column.\n")
     )
     r = run_data_model_gate(str(repo))
-    assert r.status == "fail"
-    assert any("created_at" in g for g in r.gaps)
+    assert r.status == "pass"
+    assert any("created_at" in g for g in r.warnings)
 
 
 def test_unknown_test_kind_is_flagged(tmp_path):

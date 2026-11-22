@@ -78,18 +78,31 @@ def test_exact_default_at_gate_entry_points(
         (repo / filename).write_text("A correction may change the fact_id field.\n")
 
     result = run_data_model_gate(str(repo), spec_files=[declared] if via_cli else None)
-    assert result.status == expected_status, result.gaps
+    assert result.status == (
+        "pass" if expected_gap and "mutates field" in expected_gap else expected_status
+    ), result.gaps
     assert spec_reads == expected_reads
     if expected_gap is None:
         assert result.gaps == []
     else:
-        assert len(result.gaps) == 1
-        assert expected_gap in result.gaps[0]
+        assert (
+            len(result.warnings if "mutates field" in expected_gap else result.gaps)
+            == 1
+        )
+        assert (
+            expected_gap
+            in (result.warnings if "mutates field" in expected_gap else result.gaps)[0]
+        )
 
     spec_reads.clear()
     argv = ["--repo", str(repo)]
     if via_cli:
         argv.extend(["--spec", declared])
-    assert main(argv) == (0 if expected_status == "pass" else 1)
+    assert main(argv) == (
+        0
+        if expected_status == "pass"
+        or (expected_gap and "mutates field" in expected_gap)
+        else 1
+    )
     assert json.loads(capsys.readouterr().out) == result.to_dict()
     assert spec_reads == expected_reads

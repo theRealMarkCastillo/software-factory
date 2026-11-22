@@ -168,6 +168,17 @@ Nothing in a manifest can add, relax, or reclassify a gate.
 
 The data-model gate scans the implicit default only when the repository root has a directory entry named exactly `spec.md`; files declared via `specs:` or `--spec` retain normal filesystem resolution and are gaps when missing.
 
+The prose mutation-claim scan is **ADVISORY**: its findings are serialized in
+`datamodel.warnings`, not `gaps`, and do not change gate status or CLI exit codes.
+Owner decision FF-06 recognizes that this heuristic can both over-flag and
+under-flag prose; structured declared mutations will replace it. Finding wording
+is unchanged (including the legacy `BLOCKING gap` suffix), but the warnings are
+not blocking. With warnings and no gaps, the gate passes with detail
+`data model gate passed (<n> advisory spec warning(s))`. Missing declared specs
+and unreadable specs remain blocking gaps, as do structural entity, field, and
+test-reference checks. The runner preserves warnings in the manifest; evidence
+verification continues to use gate status, not warnings.
+
 The npm audit gate covers production dependencies only, using `npm audit --json
 --audit-level moderate --omit=dev`; its result records `npm_scope: production`
 and the exact `command` argv, including in runner evidence. npm 7+ with audit

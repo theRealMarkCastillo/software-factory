@@ -267,6 +267,7 @@ def test_spec_read_once_for_prose_and_block(tmp_path, monkeypatch):
 
 def test_manifest_declared_mutations_accepted_by_real_verify_cli(tmp_path):
     from test_verify import _evidence, _repo
+
     from factory.evidence import assert_assembled_evidence
 
     repo, base, candidate = _repo(

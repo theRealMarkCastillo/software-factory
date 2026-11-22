@@ -1007,6 +1007,35 @@ def run_compose(
     )
 
 
+def _teardown_images_safe(compose_files: list[str]) -> bool:
+    """Prove local-image removal safe without asking Compose to resolve files."""
+    import yaml
+
+    if not compose_files:
+        return False
+    service_keys: dict[str, set] = {}
+    try:
+        for filename in compose_files:
+            document = yaml.safe_load(Path(filename).read_text(encoding="utf-8"))
+            if not isinstance(document, dict) or "include" in document:
+                return False
+            services = document.get("services", {})
+            if not isinstance(services, dict):
+                return False
+            for name, service in services.items():
+                if not isinstance(service, dict) or "extends" in service:
+                    return False
+                # Union keys across overrides: even null/reset values must not
+                # turn uncertainty into permission to delete custom tags.
+                keys = service_keys.setdefault(name, set())
+                keys.update(service)
+                if {"build", "image"} <= keys:
+                    return False
+    except (OSError, UnicodeError, yaml.YAMLError, RecursionError):
+        return False
+    return True
+
+
 def teardown(
     project_name: str,
     compose_files: list[str],
@@ -1016,10 +1045,14 @@ def teardown(
 ) -> subprocess.CompletedProcess:
     """Tear down ONLY the named factory project's own resources."""
     assert_factory_project(project_name)
+    args = ["down", "--volumes", "--remove-orphans"]
+    if _teardown_images_safe(compose_files):
+        args += ["--rmi", "local"]
+    args += ["--timeout", "30"]
     return run_compose(
         project_name,
         compose_files,
-        ["down", "--volumes", "--remove-orphans", "--rmi", "local", "--timeout", "30"],
+        args,
         **(
             {"project_directory": project_directory}
             if project_directory is not None

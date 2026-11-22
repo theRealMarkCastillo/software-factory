@@ -18,6 +18,86 @@ DOWN_ARGS = [
 PROJECT = "factory-image-cleanup-abc123"
 
 
+@pytest.fixture(autouse=True)
+def compose_files(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "compose.yml").write_text("services:\n  test:\n    build: .\n")
+    (tmp_path / "compose.test.yml").write_text("services: {}\n")
+
+
+@pytest.mark.parametrize(
+    "documents, remove_images",
+    [
+        (["services:\n  test:\n    build: .\n    image: custom:keep\n"], False),
+        (
+            [
+                "services:\n  test:\n    build: .\n",
+                "services:\n  test:\n    image: ${CUSTOM_IMAGE}\n",
+            ],
+            False,
+        ),
+        (["services:\n  test:\n    image: python:3.12-slim\n"], True),
+        (["services:\n  test:\n    build: .\n"], True),
+        (["include: other.yml\nservices: {}\n"], False),
+        (["services:\n  test:\n    extends: other\n"], False),
+        (["services: [invalid"], False),
+        ([None], False),
+        (["services: []\n"], False),
+        (["services:\n  test: invalid\n"], False),
+        (["- not-a-compose-mapping\n"], False),
+        (["services:\n  test:\n    build: null\n    image: null\n"], False),
+        (
+            [
+                "services:\n  test:\n    image: custom:keep\n",
+                "services:\n  test:\n    build: .\n",
+            ],
+            False,
+        ),
+    ],
+    ids=[
+        "custom-tag",
+        "override-tag",
+        "pulled",
+        "build-only",
+        "include",
+        "extends",
+        "invalid-yaml",
+        "missing",
+        "invalid-services",
+        "invalid-service",
+        "invalid-document",
+        "null-keys",
+        "override-build",
+    ],
+)
+def test_teardown_keeps_images_unless_static_files_prove_safe(
+    monkeypatch, tmp_path, documents, remove_images
+):
+    files = []
+    for index, document in enumerate(documents):
+        path = tmp_path / f"input-{index}.yml"
+        if document is not None:
+            path.write_text(document)
+        files.append(str(path))
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(policy.subprocess, "run", fake_run)
+    policy.teardown(PROJECT, files)
+    expected_args = (
+        DOWN_ARGS
+        if remove_images
+        else ["down", "--volumes", "--remove-orphans", "--timeout", "30"]
+    )
+    expected = ["docker", "compose", "--project-name", PROJECT]
+    for path in files:
+        expected += ["--file", path]
+    assert commands == [[*expected, *expected_args]]
+
+
 @pytest.mark.parametrize("deployment", [False, True])
 @pytest.mark.parametrize("with_directory", [False, True])
 def test_teardown_removes_local_images_preserving_compose_kwargs(

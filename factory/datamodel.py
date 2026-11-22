@@ -385,10 +385,22 @@ def _cross_check_specs(
                     )
 
 
+def _mutation_sort_key(value) -> tuple[str, str]:
+    """Order raw YAML scalars without comparing incompatible Python types."""
+    return type(value).__name__, str(value)
+
+
 def _normalize_mutations(mutations: dict) -> dict:
     return {
-        name: {op: sorted(set(fields)) for op, fields in sorted(ops.items())}
-        for name, ops in sorted(mutations.items())
+        name: {
+            op: sorted(set(fields), key=_mutation_sort_key)
+            for op, fields in sorted(
+                ops.items(), key=lambda item: _mutation_sort_key(item[0])
+            )
+        }
+        for name, ops in sorted(
+            mutations.items(), key=lambda item: _mutation_sort_key(item[0])
+        )
     }
 
 
@@ -504,7 +516,9 @@ def _compare_mutations(entities, model, spec, gaps, warnings):
             continue  # Explicit never-mutated claim is G4, not W1.
         claimed = spec.get(name, {})
         for op, fields in allowed.items():
-            unclaimed = sorted(set(fields) - set(claimed.get(op, [])))
+            unclaimed = sorted(
+                set(fields) - set(claimed.get(op, [])), key=_mutation_sort_key
+            )
             if op not in claimed or unclaimed:
                 warnings.append(
                     f"spec-mutations W1: model operation '{name}.{op}' or fields "

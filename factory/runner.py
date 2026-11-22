@@ -69,6 +69,12 @@ from factory.policy import (
 )
 
 
+class PreDockerPolicyViolation(PolicyViolation):
+    """A refusal from validation before any Docker work begins."""
+
+    project_name: str
+
+
 @dataclass
 class RunResult:
     card_id: str
@@ -477,213 +483,226 @@ def run_factory_card(
     if resolved_mode == "deployment" and not deployment:
         raise ValueError("deployment evidence requires deployment execution")
 
-    repo = Path(repo_path).expanduser().resolve()
-    if not repo.is_dir():
-        raise PolicyViolation(f"repo path does not exist: {repo}")
-    # Reject a sensitive subject root before resolving any compose/env input or
-    # touching Docker. This closes the repo_root=/etc reachability path.
-    assert_safe_repo_root(repo)
-    holdout_suite = load_holdout(holdout, repo) if holdout is not None else None
-    if holdout_suite is not None:
-        public_root = Path(artifacts_root).expanduser().resolve()
-        if (
-            public_root.is_relative_to(holdout_suite.root)
-            or holdout_suite.root.is_relative_to(public_root)
-            or repo.is_relative_to(holdout_suite.root)
-        ):
-            raise PolicyViolation(
-                "holdout, repository and public artifacts must not overlap"
+    project_name = new_factory_project(card_id)
+    try:
+        repo = Path(repo_path).expanduser().resolve()
+        if not repo.is_dir():
+            raise PolicyViolation(f"repo path does not exist: {repo}")
+        # Reject a sensitive subject root before resolving any compose/env input or
+        # touching Docker. This closes the repo_root=/etc reachability path.
+        assert_safe_repo_root(repo)
+        holdout_suite = load_holdout(holdout, repo) if holdout is not None else None
+        if holdout_suite is not None:
+            public_root = Path(artifacts_root).expanduser().resolve()
+            if (
+                public_root.is_relative_to(holdout_suite.root)
+                or holdout_suite.root.is_relative_to(public_root)
+                or repo.is_relative_to(holdout_suite.root)
+            ):
+                raise PolicyViolation(
+                    "holdout, repository and public artifacts must not overlap"
+                )
+        holdout_block = None
+        check_path = None
+        if deployment:
+            assert check is not None
+            check_path = (repo / check).resolve()
+            if (
+                Path(check).is_absolute()
+                or not check_path.is_relative_to(repo)
+                or not check_path.is_file()
+                or not os.access(check_path, os.X_OK)
+            ):
+                raise PolicyViolation(
+                    "--check must be a repo-relative executable inside the repo"
+                )
+
+        result = RunResult(
+            card_id=card_id, project_name="", mode=resolved_mode, gates_run=run_gates
+        )
+        start = time.time()
+
+        # The shared evidence structure requires this input in every run mode.
+        # Refuse before gates or host work, retaining the late check as a backstop.
+        example_path = _resolve_input_path(
+            repo, env_example, "env example", required=False
+        )
+        if not example_path.is_file():
+            result.project_name = project_name
+            result.stage = "env_example_missing"
+            expected = (
+                str(example_path.relative_to(repo))
+                if example_path.is_relative_to(repo)
+                else str(example_path)
             )
-    holdout_block = None
-    check_path = None
-    if deployment:
-        assert check is not None
-        check_path = (repo / check).resolve()
-        if (
-            Path(check).is_absolute()
-            or not check_path.is_relative_to(repo)
-            or not check_path.is_file()
-            or not os.access(check_path, os.X_OK)
-        ):
-            raise PolicyViolation(
-                "--check must be a repo-relative executable inside the repo"
-            )
-
-    result = RunResult(
-        card_id=card_id, project_name="", mode=resolved_mode, gates_run=run_gates
-    )
-    start = time.time()
-
-    # The shared evidence structure requires this input in every run mode.
-    # Refuse before gates or host work, retaining the late check as a backstop.
-    example_path = _resolve_input_path(repo, env_example, "env example", required=False)
-    if not example_path.is_file():
-        result.project_name = new_factory_project(card_id)
-        result.stage = "env_example_missing"
-        expected = (
-            str(example_path.relative_to(repo))
-            if example_path.is_relative_to(repo)
-            else str(example_path)
-        )
-        result.error = (
-            f"Required env example missing: {expected}; "
-            "add the file or pass --env-example <path>"
-        )
-        artifacts_dir = Path(artifacts_root).expanduser() / result.project_name
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        result.artifacts_dir = str(artifacts_dir)
-        result.duration_s = time.time() - start
-        (artifacts_dir / "result.json").write_text(
-            json.dumps(result.to_dict(), indent=2) + "\n"
-        )
-        return result
-
-    # 1. Static validation before anything touches Docker.
-    result.stage = "validating_compose"
-    resolved_compose = [
-        _resolve_input_path(repo, f, "compose file") for f in compose_files
-    ]
-    if deployment:
-        # Inspect each original file: a later override or allocated rewrite must
-        # never conceal an unsafe developer-facing publication. No gate/waiver
-        # setting can bypass this check, and refusal performs no Docker work.
-        assert yaml is not None
-        refusals = []
-        for path in resolved_compose:
-            doc = yaml.safe_load(path.read_text()) or {}
-            if not isinstance(doc, dict):
-                raise PolicyViolation(f"compose document must be a mapping: {path}")
-            for service, config in (doc.get("services") or {}).items():
-                if not isinstance(config, dict):
-                    continue  # ordinary Compose validation diagnoses this below
-                mappings = config.get("ports") or []
-                if not isinstance(mappings, list):
-                    raise PolicyViolation("deployment ports must be a list")
-                for mapping in mappings:
-                    try:
-                        deployment_port_target(mapping)
-                    except PolicyViolation as exc:
-                        refusals.append(
-                            {
-                                "file": str(path),
-                                "service": service,
-                                "spec": mapping,
-                                "reason": str(exc),
-                            }
-                        )
-        if refusals:
-            result.project_name = new_factory_project(card_id)
-            result.stage = "exposure_refused"
-            result.error = "\n".join(
-                f"{item['file']}: service {item['service']!r}, "
-                f"port {item['spec']!r}: {item['reason']}"
-                for item in refusals
+            result.error = (
+                f"Required env example missing: {expected}; "
+                "add the file or pass --env-example <path>"
             )
             artifacts_dir = Path(artifacts_root).expanduser() / result.project_name
             artifacts_dir.mkdir(parents=True, exist_ok=True)
             result.artifacts_dir = str(artifacts_dir)
             result.duration_s = time.time() - start
-            source = capture_source(repo)
-            write_evidence_manifest(
-                artifacts_dir,
-                repo,
-                entry_point=entry_point,
-                command=[],
-                mode=resolved_mode,
-                gates_run=run_gates,
-                source_start=source,
-                source_end=source,
-                base=resolve_base_info(repo, "main" if base_ref is None else base_ref),
-                runtime={
-                    "deployment": {"exposure_refusals": refusals},
-                    "teardown": {
-                        "attempted": False,
-                        "ok": False,
-                        "detail": "source exposure refused before Docker",
-                    },
-                    "safety": {
-                        "postflight": "not_run",
-                        "protected_changes": [],
-                        "unexpected_changes": [],
-                        "collateral_damage": False,
-                    },
-                },
-                card_id=card_id,
-                project_name=result.project_name,
-                execution={
-                    "exit_code": result.exit_code,
-                    "passed": False,
-                    "stage": result.stage,
-                    "error": result.error,
-                    "duration_s": round(result.duration_s, 2),
-                },
+            (artifacts_dir / "result.json").write_text(
+                json.dumps(result.to_dict(), indent=2) + "\n"
             )
             return result
-    merged_compose = _load_compose_files(
-        resolved_compose, repo_root=repo, deployment=deployment
-    )
-    assert_safe_compose_file(merged_compose, repo_root=repo, deployment=deployment)
-    if holdout_suite is not None:
-        holdout_override(merged_compose, str(holdout_suite.root), repo)
-    if not deployment and test_service not in merged_compose.get("services", {}):
-        raise PolicyViolation(
-            f"test_service '{test_service}' not found in compose services: "
-            f"{list(merged_compose.get('services', {}).keys())}"
+
+        # 1. Static validation before anything touches Docker.
+        result.stage = "validating_compose"
+        resolved_compose = [
+            _resolve_input_path(repo, f, "compose file") for f in compose_files
+        ]
+        if deployment:
+            # Inspect each original file: a later override or allocated rewrite must
+            # never conceal an unsafe developer-facing publication. No gate/waiver
+            # setting can bypass this check, and refusal performs no Docker work.
+            assert yaml is not None
+            refusals = []
+            for path in resolved_compose:
+                doc = yaml.safe_load(path.read_text()) or {}
+                if not isinstance(doc, dict):
+                    raise PolicyViolation(f"compose document must be a mapping: {path}")
+                for service, config in (doc.get("services") or {}).items():
+                    if not isinstance(config, dict):
+                        continue  # ordinary Compose validation diagnoses this below
+                    mappings = config.get("ports") or []
+                    if not isinstance(mappings, list):
+                        raise PolicyViolation("deployment ports must be a list")
+                    for mapping in mappings:
+                        try:
+                            deployment_port_target(mapping)
+                        except PolicyViolation as exc:
+                            refusals.append(
+                                {
+                                    "file": str(path),
+                                    "service": service,
+                                    "spec": mapping,
+                                    "reason": str(exc),
+                                }
+                            )
+            if refusals:
+                result.project_name = project_name
+                result.stage = "exposure_refused"
+                result.error = "\n".join(
+                    f"{item['file']}: service {item['service']!r}, "
+                    f"port {item['spec']!r}: {item['reason']}"
+                    for item in refusals
+                )
+                artifacts_dir = Path(artifacts_root).expanduser() / result.project_name
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                result.artifacts_dir = str(artifacts_dir)
+                result.duration_s = time.time() - start
+                source = capture_source(repo)
+                write_evidence_manifest(
+                    artifacts_dir,
+                    repo,
+                    entry_point=entry_point,
+                    command=[],
+                    mode=resolved_mode,
+                    gates_run=run_gates,
+                    source_start=source,
+                    source_end=source,
+                    base=resolve_base_info(
+                        repo, "main" if base_ref is None else base_ref
+                    ),
+                    runtime={
+                        "deployment": {"exposure_refusals": refusals},
+                        "teardown": {
+                            "attempted": False,
+                            "ok": False,
+                            "detail": "source exposure refused before Docker",
+                        },
+                        "safety": {
+                            "postflight": "not_run",
+                            "protected_changes": [],
+                            "unexpected_changes": [],
+                            "collateral_damage": False,
+                        },
+                    },
+                    card_id=card_id,
+                    project_name=result.project_name,
+                    execution={
+                        "exit_code": result.exit_code,
+                        "passed": False,
+                        "stage": result.stage,
+                        "error": result.error,
+                        "duration_s": round(result.duration_s, 2),
+                    },
+                )
+                return result
+        merged_compose = _load_compose_files(
+            resolved_compose, repo_root=repo, deployment=deployment
         )
-
-    project_name = new_factory_project(card_id)
-    result.project_name = project_name
-
-    # 1b. Capture the source and the immutable diff base BEFORE any gate runs,
-    #     then run the gates against that captured base. Resolving the base only
-    #     afterwards could not bind what was actually measured.
-    base_info = resolve_base_info(repo, "main" if base_ref is None else base_ref)
-    if base_info["kind"] != "commit":
-        code = base_info.get("error", "base_not_found")
-        if base_ref is not None or code != "base_not_found":
-            result.stage = "base_resolution"
-            alternatives = ", ".join(base_info.get("alternatives", []))
-            result.error = (
-                f"{code}: cannot resolve diff base to a commit: {base_info['ref']}"
+        assert_safe_compose_file(merged_compose, repo_root=repo, deployment=deployment)
+        if holdout_suite is not None:
+            holdout_override(merged_compose, str(holdout_suite.root), repo)
+        if not deployment and test_service not in merged_compose.get("services", {}):
+            raise PolicyViolation(
+                f"test_service '{test_service}' not found in compose services: "
+                f"{list(merged_compose.get('services', {}).keys())}"
             )
-            if alternatives:
-                result.error += f"; alternatives: {alternatives}"
+
+        result.project_name = project_name
+
+        # 1b. Capture the source and the immutable diff base BEFORE any gate runs,
+        #     then run the gates against that captured base. Resolving the base only
+        #     afterwards could not bind what was actually measured.
+        base_info = resolve_base_info(repo, "main" if base_ref is None else base_ref)
+        if base_info["kind"] != "commit":
+            code = base_info.get("error", "base_not_found")
+            if base_ref is not None or code != "base_not_found":
+                result.stage = "base_resolution"
+                alternatives = ", ".join(base_info.get("alternatives", []))
+                result.error = (
+                    f"{code}: cannot resolve diff base to a commit: {base_info['ref']}"
+                )
+                if alternatives:
+                    result.error += f"; alternatives: {alternatives}"
+                result.duration_s = time.time() - start
+                return result
+            # Legacy omitted-main diagnostics retain execution and artifacts, but
+            # unresolved evidence still fails certification in the shared checker.
+            base_info = {"ref": "main", "kind": "unresolved", "sha": ""}
+        source_start = capture_source(repo)
+
+        # Pre-Docker gates: fail closed BEFORE anything is built or run.
+        result.gates_run = run_gates
+        if not run_gates:
+            result.gates["audit"] = {"status": "disabled", "reason": "gates_disabled"}
+            result.gates["datamodel"] = {
+                "status": "disabled",
+                "reason": "gates_disabled",
+            }
+            result.gates["coverage"] = {
+                "status": "disabled",
+                "reason": "gates_disabled",
+                "base": base_info["ref"],
+                "base_sha": base_info["sha"],
+                "base_kind": base_info["kind"],
+            }
+            result.log.append(
+                "GATES SKIPPED (--no-gates): this run is second-class evidence "
+                "and cannot certify an assembled-system claim on its own"
+            )
+        elif not _run_preflight_gates(repo, result, base_info):
+            artifacts_dir = Path(artifacts_root).expanduser() / project_name
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            result.artifacts_dir = str(artifacts_dir)
             result.duration_s = time.time() - start
+            (artifacts_dir / "result.json").write_text(
+                json.dumps(result.to_dict(), indent=2) + "\n"
+            )
             return result
-        # Legacy omitted-main diagnostics retain execution and artifacts, but
-        # unresolved evidence still fails certification in the shared checker.
-        base_info = {"ref": "main", "kind": "unresolved", "sha": ""}
-    source_start = capture_source(repo)
 
-    # Pre-Docker gates: fail closed BEFORE anything is built or run.
-    result.gates_run = run_gates
-    if not run_gates:
-        result.gates["audit"] = {"status": "disabled", "reason": "gates_disabled"}
-        result.gates["datamodel"] = {"status": "disabled", "reason": "gates_disabled"}
-        result.gates["coverage"] = {
-            "status": "disabled",
-            "reason": "gates_disabled",
-            "base": base_info["ref"],
-            "base_sha": base_info["sha"],
-            "base_kind": base_info["kind"],
-        }
-        result.log.append(
-            "GATES SKIPPED (--no-gates): this run is second-class evidence "
-            "and cannot certify an assembled-system claim on its own"
-        )
-    elif not _run_preflight_gates(repo, result, base_info):
+        abs_compose_files = [str(p) for p in resolved_compose]
+
         artifacts_dir = Path(artifacts_root).expanduser() / project_name
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        result.artifacts_dir = str(artifacts_dir)
-        result.duration_s = time.time() - start
-        (artifacts_dir / "result.json").write_text(
-            json.dumps(result.to_dict(), indent=2) + "\n"
-        )
-        return result
+    except PolicyViolation as exc:
+        refusal = PreDockerPolicyViolation(*exc.args)
+        refusal.project_name = project_name
+        raise refusal from exc
 
-    abs_compose_files = [str(p) for p in resolved_compose]
-
-    artifacts_dir = Path(artifacts_root).expanduser() / project_name
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     result.artifacts_dir = str(artifacts_dir)
 
@@ -1267,10 +1286,10 @@ def main(argv: list[str] | None = None) -> int:
             wait_timeout=args.wait_timeout,
             holdout=args.holdout,
         )
-    except PolicyViolation as exc:
+    except PreDockerPolicyViolation as exc:
         result = RunResult(
             card_id=args.card,
-            project_name=new_factory_project(args.card),
+            project_name=exc.project_name,
             passed=False,
             stage="policy_violation",
             error=str(exc),

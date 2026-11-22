@@ -177,7 +177,7 @@ def test_cli_sensitive_env_refusal_in_home_checkout(
     monkeypatch.setattr(policy, "_is_home_checkout", lambda root: root == repo)
     (repo / ".env").write_text("EXAMPLE=local\n")
     (repo / "compose.yml").write_text(
-        'services:\n  test:\n    image: example:test\n'
+        "services:\n  test:\n    image: example:test\n"
         '    volumes: ["./.env:/app/.env"]\n'
     )
     assert runner.main(_argv(repo, tmp_path)) == 1

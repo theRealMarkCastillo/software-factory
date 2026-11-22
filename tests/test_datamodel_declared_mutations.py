@@ -81,9 +81,9 @@ def test_single_block_records_normalized_declarations(tmp_path):
         (block(["orders"]), True, True),
         (block({"orders": []}), True, True),
         (block({"orders": {"edit": "value"}}), True, True),
-        (block({"orders": {"edit": [42]}}), True, True),
-        (block({42: {}}), True, True),
-        (block({"orders": {42: []}}), True, True),
+        (block({"orders": {"edit": [[42]]}}), True, True),
+        (block({42: []}), True, True),
+        (block({"orders": {42: "value"}}), True, True),
         ("```yaml factory-mutations\n```\n", True, True),
         ("```yaml factory-mutations\norders: {}\n````\n", True, False),
         ("````yaml factory-mutations\norders: {}\n```\n", True, True),
@@ -315,11 +315,11 @@ def test_yaml_scalars_with_block_are_deterministic(tmp_path, claims):
     assert result["gaps"] == []
     assert result["declared_mutations"] == {
         "spec": claims,
-        "model": {"switches": {"toggle": [True, "label"]}},
+        "model": {"switches": {"toggle": ["label", "true"]}},
     }
     assert result["warnings"] == [
         "spec-mutations W1: model operation 'switches.toggle' or fields "
-        + ("[True]" if claims else "[True, 'label']")
+        + ("['true']" if claims else "['label', 'true']")
         + " are not claimed by the spec"
     ]
     expected = json.dumps(result)
@@ -333,6 +333,134 @@ def test_yaml_scalars_with_block_are_deterministic(tmp_path, claims):
         )
         assert process.returncode == 0, (process.stdout, process.stderr)
         assert json.loads(process.stdout) == result
+
+
+@pytest.mark.parametrize("spec_kind", ["none", "prose", "empty", "matching"])
+@pytest.mark.parametrize(
+    "model_yaml,canonical",
+    [
+        (
+            "switches: {toggle: [label, on]}",
+            {"switches": {"toggle": ["label", "true"]}},
+        ),
+        (
+            "yes: {edit: [value]}\norders: {edit: [value]}",
+            {"true": {"edit": ["value"]}, "orders": {"edit": ["value"]}},
+        ),
+        (
+            "orders: {edit: [value, 2026-01-01]}",
+            {"orders": {"edit": ["2026-01-01", "value"]}},
+        ),
+        (
+            "orders: {edit: [value, 2026-01-01 10:00:00]}",
+            {"orders": {"edit": ["2026-01-01T10:00:00", "value"]}},
+        ),
+        (
+            "orders: {edit: [value, !!binary aGVsbG8=]}",
+            {"orders": {"edit": ["base64:aGVsbG8=", "value"]}},
+        ),
+    ],
+)
+def test_canonical_scalars_json_api_cli(tmp_path, spec_kind, model_yaml, canonical):
+    model = yaml.safe_load(model_yaml)
+    specs = {
+        "none": None,
+        "prose": {"spec.md": "A catalog of records.\n"},
+        "empty": {"spec.md": block({})},
+        # Escape the operation spelling to avoid BASE's out-of-scope prose
+        # re.escape crash on non-string fields next to the verb "edit".
+        "matching": {"spec.md": block(model).replace("edit:", '"\\u0065dit":')},
+    }
+    repo = make_repo(tmp_path, model, specs[spec_kind])
+    result = run_data_model_gate(str(repo)).to_dict()
+    assert json.loads(json.dumps(result, sort_keys=True)) == result
+    assert json.loads(json.dumps(result)) == result
+    assert result["status"] == "pass", result["gaps"]
+    assert result["gaps"] == []
+    assert result["declared_mutations"]["model"] == canonical
+    if spec_kind == "empty":
+        assert result["declared_mutations"]["spec"] == {}
+        assert result["warnings"] == [
+            f"spec-mutations W1: model operation '{name}.{op}' or fields "
+            f"{fields} are not claimed by the spec"
+            for name, ops in sorted(canonical.items())
+            for op, fields in sorted(ops.items())
+        ]
+    else:
+        assert result["warnings"] == []
+        assert result["detail"] == "data model gate passed"
+        assert result["declared_mutations"]["spec"] == (
+            canonical if spec_kind == "matching" else None
+        )
+    outputs = []
+    for seed in ("0", "73"):
+        process = subprocess.run(
+            [sys.executable, "-m", "factory.datamodel", "--repo", str(repo)],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert process.returncode == 0, (process.stdout, process.stderr)
+        assert json.loads(process.stdout) == result
+        outputs.append(process.stdout)
+    assert outputs[0] == outputs[1]
+
+
+def test_canonical_collisions_merge_before_comparison(tmp_path):
+    model = yaml.safe_load(
+        'yes: {toggle: [on, value]}\n"true": {toggle: ["true", stamp]}'
+    )
+    claims = yaml.safe_load('yes: {toggle: [on]}\n"true": {toggle: [value, stamp]}')
+    result = run_data_model_gate(
+        str(make_repo(tmp_path, model, {"spec.md": block(claims)}))
+    )
+    assert result.status == "pass", result.gaps
+    assert result.warnings == []
+    expected = {"true": {"toggle": ["stamp", "true", "value"]}}
+    assert result.to_dict()["declared_mutations"] == {
+        "model": expected,
+        "spec": expected,
+    }
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (True, "true"),
+        (False, "false"),
+        (None, "null"),
+        (2, "2"),
+        (2.5, "2.5"),
+        (b"hello", "base64:aGVsbG8="),
+    ],
+)
+def test_canonical_operation_and_protected_names(tmp_path, raw, expected):
+    # Non-string model operations retain BASE's self-check limitation; use
+    # a canonical string operation on D and a raw scalar operation on S.
+    repo = make_repo(
+        tmp_path,
+        {"orders": {expected: ["value"]}},
+        {"spec.md": block({"orders": {raw: ["value"]}})},
+    )
+    result = run_data_model_gate(str(repo))
+    assert result.status == "pass", result.gaps
+    assert result.warnings == []
+    assert result.to_dict()["declared_mutations"]["spec"] == {
+        "orders": {expected: ["value"]}
+    }
+
+
+def test_canonical_protected_fields_are_compared(tmp_path):
+    repo = make_repo(
+        tmp_path,
+        {"orders": {"toggle": ["value"]}},
+        {"spec.md": block({"orders": {"toggle": ["true"]}})},
+    )
+    doc = yaml.safe_load((repo / "data-model.yml").read_text())
+    doc["entities"]["orders"]["immutable"] = [True]
+    (repo / "data-model.yml").write_text(yaml.safe_dump(doc))
+    result = run_data_model_gate(str(repo))
+    assert prefixes(result) == {"spec-mutations G2", "spec-mutations G3"}
 
 
 def test_manifest_declared_mutations_accepted_by_real_verify_cli(tmp_path):

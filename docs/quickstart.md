@@ -34,6 +34,7 @@ failure marker remain in that directory. A missing Docker daemon is an environme
 failure, not evidence that the workload passed.
 Pre-Docker audit, coverage, and data-model gate refusals leave `result.json` in
 the returned `artifacts_dir`, but no certifiable evidence manifest.
+The CLI also reports static Compose policy refusals as `policy_violation` JSON with `result.json` but no evidence manifest; the library still raises `PolicyViolation`.
 
 ## Use your own project
 

@@ -1247,25 +1247,46 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    result = run_factory_card(
-        card_id=args.card,
-        repo_path=args.repo,
-        compose_files=args.compose_files,
-        test_service=args.test_service,
-        timeout=args.timeout,
-        entry_point=args.entry_point,
-        env_file=args.env_file,
-        env_example=args.env_example,
-        fixture_paths=args.fixture,
-        run_gates=not args.no_gates,
-        mode=args.mode,
-        artifacts_root=args.artifacts_root,
-        base_ref=args.base,
-        deployment=args.deployment,
-        check=args.check,
-        wait_timeout=args.wait_timeout,
-        holdout=args.holdout,
-    )
+    try:
+        result = run_factory_card(
+            card_id=args.card,
+            repo_path=args.repo,
+            compose_files=args.compose_files,
+            test_service=args.test_service,
+            timeout=args.timeout,
+            entry_point=args.entry_point,
+            env_file=args.env_file,
+            env_example=args.env_example,
+            fixture_paths=args.fixture,
+            run_gates=not args.no_gates,
+            mode=args.mode,
+            artifacts_root=args.artifacts_root,
+            base_ref=args.base,
+            deployment=args.deployment,
+            check=args.check,
+            wait_timeout=args.wait_timeout,
+            holdout=args.holdout,
+        )
+    except PolicyViolation as exc:
+        result = RunResult(
+            card_id=args.card,
+            project_name=new_factory_project(args.card),
+            passed=False,
+            stage="policy_violation",
+            error=str(exc),
+            mode=(
+                "deployment"
+                if args.deployment
+                else args.mode or ("diagnostic" if args.no_gates else "acceptance")
+            ),
+            gates_run=not args.no_gates,
+        )
+        artifacts_dir = Path(args.artifacts_root).expanduser() / result.project_name
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        result.artifacts_dir = str(artifacts_dir)
+        (artifacts_dir / "result.json").write_text(
+            json.dumps(result.to_dict(), indent=2) + "\n"
+        )
     print(json.dumps(result.to_dict(), indent=2))
 
     if args.retention is not None:

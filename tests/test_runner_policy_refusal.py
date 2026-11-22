@@ -2,12 +2,16 @@
 
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
-from test_runner_cli_regressions import _argv, offline_runtime, subject  # noqa: F401
+from test_runner_cli_regressions import _argv
 
 from factory import evidence, policy, runner, verify
+
+pytest_plugins = ["test_runner_cli_regressions"]
 
 
 @pytest.fixture
@@ -81,3 +85,84 @@ def test_cli_static_policy_refusal_is_structured(
     )
     assert json.loads(capsys.readouterr().out)["ok"] is False
     assert not recording_docker.exists()
+
+
+@pytest.mark.parametrize("command", ["factory-run", "factory"])
+def test_installed_cli_policy_refusal(subject, recording_docker, tmp_path, command):
+    repo, _, _ = subject
+    (repo / "compose.yml").write_text(
+        'services:\n  test:\n    image: example:test\n    ports: ["8080:80"]\n'
+    )
+    executable = Path(sys.executable).parent / command
+    argv = [str(executable)] + (["run"] if command == "factory" else [])
+    completed = subprocess.run(
+        argv + _argv(repo, tmp_path), capture_output=True, text=True, check=False
+    )
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    result = json.loads(completed.stdout)
+    assert result["stage"] == "policy_violation"
+    artifacts = Path(result["artifacts_dir"])
+    assert json.loads((artifacts / "result.json").read_text()) == result
+    assert not (artifacts / evidence.MANIFEST_FILENAME).exists()
+    assert not recording_docker.exists()
+
+
+def test_cli_deployment_policy_mode(subject, recording_docker, tmp_path, capsys):
+    repo, _, _ = subject
+    check = repo / "check.sh"
+    check.write_text("#!/bin/sh\nexit 0\n")
+    check.chmod(0o755)
+    (repo / "compose.yml").write_text(
+        "services:\n  test:\n    image: example:test\n    privileged: true\n"
+    )
+    assert (
+        runner.main(_argv(repo, tmp_path) + ["--deployment", "--check", "check.sh"])
+        == 1
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["stage"] == "policy_violation"
+    assert result["mode"] == "deployment"
+    assert result["gates_run"] is True
+    assert not recording_docker.exists()
+
+
+def test_cli_other_exceptions_propagate(subject, monkeypatch, tmp_path, capsys):
+    repo, _, _ = subject
+
+    def fail(**kwargs):
+        raise RuntimeError("unrelated failure")
+
+    monkeypatch.setattr(runner, "run_factory_card", fail)
+    with pytest.raises(RuntimeError, match="unrelated failure"):
+        runner.main(_argv(repo, tmp_path))
+    assert capsys.readouterr().out == ""
+    assert not (tmp_path / "artifacts").exists()
+
+
+def test_cli_postflight_policy_violation_keeps_stage(
+    subject, offline_runtime, monkeypatch, tmp_path, capsys
+):
+    repo, _, _ = subject
+    snapshots = [
+        policy.ProtectedProjectSnapshot(),
+        policy.PolicyViolation("postflight unavailable"),
+    ]
+
+    def capture(cls):
+        item = snapshots.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(
+        runner.ProtectedProjectSnapshot, "capture", classmethod(capture)
+    )
+    assert runner.main(_argv(repo, tmp_path)) == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["stage"] == "postflight_failed"
+    assert result["error"] == "postflight unavailable"
+    assert offline_runtime
+    artifacts = Path(result["artifacts_dir"])
+    assert (artifacts / "POSTFLIGHT_FAILURE.txt").read_text() == result["error"]
+    assert not (artifacts / "result.json").exists()

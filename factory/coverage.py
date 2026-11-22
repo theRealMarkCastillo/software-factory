@@ -702,8 +702,8 @@ def run_coverage_gate(
             else:
                 failures.append(
                     f"uncovered added executable line(s) {missed} in '{f}' "
-                    f"(add a test that executes them, or an inline "
-                    f"'{PRAGMA_MARKER}' on the same line)"
+                    f"(add a test that executes them; an inline "
+                    f"'{PRAGMA_MARKER}' waiver needs reviewer justification)"
                 )
 
     if failures:

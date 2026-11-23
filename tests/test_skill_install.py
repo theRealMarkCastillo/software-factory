@@ -32,6 +32,7 @@ def test_installs_only_curated_skills_and_refuses_overwrite(tmp_path):
         "software-factory-ops",
         "factory-qc-gating",
         "worker-software-engineer",
+        "cli-agent-delegation",
         "hermes-kanban-dispatch",
         "integration-test-verification",
         "one-verifiable-change",

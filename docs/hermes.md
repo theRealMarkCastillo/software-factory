@@ -11,7 +11,7 @@ Run `uv sync --locked` to install the factory Python environment first. From the
 uv run --locked python scripts/install_hermes_skills.py --destination ~/.hermes/skills
 ```
 
-This prints a dry-run plan. To copy the eight curated skills:
+This prints a dry-run plan. To copy the curated skills:
 
 ```sh
 uv run --locked python scripts/install_hermes_skills.py --destination ~/.hermes/skills --apply

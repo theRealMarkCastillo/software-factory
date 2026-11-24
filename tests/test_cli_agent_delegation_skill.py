@@ -172,6 +172,15 @@ def test_model_identity_comes_from_records_not_self_report():
     assert "never ask the model to identify itself" in evidence
 
 
+def test_invocation_record_populates_model_from_cli_json():
+    evidence = _section("Evidence")
+    assert (
+        "Populate each per-invocation record's `model` field from the CLI's own JSON "
+        "(Claude Code: `modelUsage` keys; Codex: the rollout's `turn_context` model); "
+        "never leave `model` null when the CLI ran." in evidence
+    )
+
+
 def test_unavailable_or_failed_cli_falls_back_with_reason_before_blocking():
     fallback = _section("Fallback")
     assert (

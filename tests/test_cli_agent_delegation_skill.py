@@ -79,10 +79,13 @@ def test_tdd_requires_worker_verified_red_before_green():
             "Sandbox scoped to cwd",
         ),
         (
-            'claude -p "<brief>" --permission-mode acceptEdits '
-            '--allowedTools "Read,Edit,Write,Bash(<validation cmd>*)" '
-            "--max-turns <n> --output-format json",
-            "Edits in cwd; only listed Bash",
+            'claude -p "<brief>" --permission-mode dontAsk '
+            "--permission-prompts none --tools Read,Edit,Write,Bash "
+            '--allowedTools "Read,Edit(<permitted file>)...,Write(<permitted file>)...,'
+            'Bash(<exact validation cmd>)" --max-turns <n> --output-format json '
+            "--strict-mcp-config",
+            "Listed files only; exact validation command plus Claude Code's built-in "
+            "read-only commands; argv is not proof",
         ),
         (
             'agy -p "<brief>" --mode accept-edits --sandbox --print-timeout <t> '
@@ -93,6 +96,37 @@ def test_tdd_requires_worker_verified_red_before_green():
 )
 def test_write_command_is_paired_with_its_permission_boundary(command, permission):
     assert f"`{command}` | {permission} |" in _section("CLI command shapes")
+
+
+def test_claude_implementation_has_no_bash_wildcard():
+    row = next(
+        line
+        for line in _read_skill().splitlines()
+        if line.startswith("| Claude Code |")
+    )
+    assert not re.search(r"Bash\([^)]*\*[^)]*\)", row)
+
+
+def test_profile_audits_transcript_and_diff_before_accepting_any_cli_step():
+    audit = _section("Transcript audit (all CLIs, mandatory)")
+    assert "Before accepting any delegated step" in audit
+    assert "Parse the CLI transcript or JSON" in audit
+    assert "Reject the step if" in audit
+    assert (
+        "any shell call is neither the exact validation command nor a read-only "
+        "inspection command with no redirection or chaining" in audit
+    )
+    assert "any write or edit targets a path outside the permitted files" in audit
+    assert "the worktree diff touches any unpermitted path" in audit
+    assert "discard the CLI's edits" in audit
+    assert "fall back or block" in audit
+    assert "unaudited and must use the fallback" in audit
+
+
+def test_transcript_audit_result_and_offending_calls_are_invocation_evidence():
+    evidence = _section("Evidence")
+    assert "`transcript_audit: pass|fail`" in evidence
+    assert "list the offending calls" in evidence
 
 
 def test_reviewer_cli_is_read_only_for_each_vendor():

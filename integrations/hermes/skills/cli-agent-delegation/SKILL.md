@@ -58,15 +58,17 @@ contents. Quote values as single arguments; placeholders are not shell syntax.
 | CLI | Headless command shape | Write permission |
 | --- | --- | --- |
 | Codex | `codex exec -s workspace-write -m <pinned model> "<brief>"` | Sandbox scoped to cwd |
-| Claude Code | `claude -p "<brief>" --permission-mode dontAsk --permission-prompts none --tools Read,Edit,Write,Bash --allowedTools "Read,Edit(<permitted file>)...,Write(<permitted file>)...,Bash(<exact validation cmd>)" --max-turns <n> --output-format json --strict-mcp-config` | Listed files only; exact validation command plus Claude Code's built-in read-only commands; argv is not proof |
+| Claude Code | `claude -p "<brief>" --permission-mode dontAsk --permission-prompts none --tools Read,Edit,Write,Bash --allowedTools "Read,Edit(/<path from worktree root>)...,Write(/<path from worktree root>)...,Bash(<exact validation cmd>)" --max-turns <n> --output-format json --strict-mcp-config` | Root-anchored file rules; exact validation command plus Claude Code's built-in read-only commands (including pipelines into read-only commands, which the audit rejects); argv is not proof |
 | Antigravity | `agy -p "<brief>" --mode accept-edits --sandbox --print-timeout <t> --output-format json` | Edits; terminal restricted |
 
-For Claude Code, replace the repeated placeholders with one `Edit(...)` and one
-`Write(...)` entry per permitted file. Use one Bash entry containing the exact
-validation command from the brief, with no wildcard. Claude Code admits its
-built-in read-only commands regardless of allow rules. Containment relies on
-scoped write rules, the transcript audit, and the profile's own diff check,
-not on the Bash allow rule alone.
+For Claude Code, run from the Git worktree root. Replace the repeated
+placeholders with one `Edit(...)` and one `Write(...)` entry per permitted file.
+Spell each path relative to that root, with a single leading `/` (not `./` or
+an absolute filesystem path). Unanchored rules can match files at other depths.
+Use one Bash entry containing the exact validation command from the brief, with
+no wildcard. Claude Code admits its built-in read-only commands regardless of
+allow rules. Containment relies on scoped write rules, the transcript audit,
+and the profile's own diff check, not on the Bash allow rule alone.
 
 Verify effective permissions: a tool allowlist is not proof that inherited
 settings or extensions cannot grant additional access. Do not delegate if the

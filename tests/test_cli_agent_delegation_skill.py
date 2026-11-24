@@ -82,7 +82,7 @@ def test_tdd_requires_worker_verified_red_before_green():
             'claude -p "<brief>" --permission-mode dontAsk '
             "--permission-prompts none --tools Read,Edit,Write,Bash "
             '--allowedTools "Read,Edit(/<path from worktree root>)...,'
-            'Write(/<path from worktree root>)...,'
+            "Write(/<path from worktree root>)...,"
             'Bash(<exact validation cmd>)" --max-turns <n> --output-format json '
             "--strict-mcp-config",
             "Root-anchored file rules; exact validation command plus Claude Code's built-in "

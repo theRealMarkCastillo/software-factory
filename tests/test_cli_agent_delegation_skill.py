@@ -81,11 +81,13 @@ def test_tdd_requires_worker_verified_red_before_green():
         (
             'claude -p "<brief>" --permission-mode dontAsk '
             "--permission-prompts none --tools Read,Edit,Write,Bash "
-            '--allowedTools "Read,Edit(<permitted file>)...,Write(<permitted file>)...,'
+            '--allowedTools "Read,Edit(/<path from worktree root>)...,'
+            'Write(/<path from worktree root>)...,'
             'Bash(<exact validation cmd>)" --max-turns <n> --output-format json '
             "--strict-mcp-config",
-            "Listed files only; exact validation command plus Claude Code's built-in "
-            "read-only commands; argv is not proof",
+            "Root-anchored file rules; exact validation command plus Claude Code's built-in "
+            "read-only commands (including pipelines into read-only commands, which the "
+            "audit rejects); argv is not proof",
         ),
         (
             'agy -p "<brief>" --mode accept-edits --sandbox --print-timeout <t> '
@@ -105,6 +107,14 @@ def test_claude_implementation_has_no_bash_wildcard():
         if line.startswith("| Claude Code |")
     )
     assert not re.search(r"Bash\([^)]*\*[^)]*\)", row)
+
+
+def test_claude_file_rules_are_anchored_at_the_worktree_root():
+    shapes = _section("CLI command shapes")
+    assert "run from the Git worktree root" in shapes
+    assert "one `Edit(...)` and one `Write(...)` entry per permitted file" in shapes
+    assert "with a single leading `/`" in shapes
+    assert "Unanchored rules can match files at other depths" in shapes
 
 
 def test_profile_audits_transcript_and_diff_before_accepting_any_cli_step():
